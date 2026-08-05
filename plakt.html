@@ -1109,6 +1109,77 @@ function dup(){ const o = cur(); if(!o) return; commit();
   const c = {...o, id:nextId(), x:o.x+off, y:o.y+off}; doc.objects.push(c); sel = c.id; touch(); }
 function del(){ if(sel === null) return; commit();
   doc.objects = doc.objects.filter(o => o.id !== sel); sel = null; touch(); }
+
+/* ── clipboard ───────────────────────────────────────────────────────
+   Objects travel as their own greppable JSON, wrapped so we can tell it's
+   ours. The referenced swatches ride along, so pasting into another plakt
+   keeps the colours instead of falling back to black. `clip` is an in-app
+   fallback for when the system clipboard is unreadable (offline file://). */
+let clip = null;
+function clipData(objs){
+  const ids = new Set(objs.map(o => fillSlot(o.fill)));
+  return { plakt:'clip', v:1,
+    objects: objs.map(o => ({...o})),
+    palette: doc.palette.filter(p => ids.has(p.id)).map(p => ({...p})) };
+}
+function parseClip(text){
+  try{ const d = JSON.parse(text);
+    if(d && d.plakt === 'clip' && Array.isArray(d.objects) && d.objects.length) return d;
+  }catch(e){}
+  return null;
+}
+function pasteClip(d){
+  if(!d || !Array.isArray(d.objects) || !d.objects.length) return false;
+  commit();
+  (d.palette || []).forEach(p => { if(!doc.palette.some(q => q.id === p.id)) doc.palette.push({...p}); });
+  const off = Math.round(Math.max(doc.w,doc.h)/40);
+  let last = null;
+  d.objects.forEach(src => {
+    const o = {...src, id: nextId(), x:(src.x||0)+off, y:(src.y||0)+off};
+    doc.objects.push(o); last = o.id;
+  });
+  sel = last; tab = 'selection'; touch(); flash('pasted');
+  return true;
+}
+const inField = () => ['INPUT','TEXTAREA'].includes((document.activeElement||{}).tagName);
+/* System copy/cut/paste ride the real clipboard events so they work from a
+   saved file and carry between two open plakts. Inside a text field the
+   browser's own clipboard wins — we bow out. */
+addEventListener('copy', e => {
+  if(!document.body.classList.contains('edit') || inField()) return;
+  const o = cur(); if(!o || !e.clipboardData) return;
+  clip = clipData([o]);
+  e.clipboardData.setData('text/plain', JSON.stringify(clip));
+  e.preventDefault(); flash('copied ' + o.type);
+});
+addEventListener('cut', e => {
+  if(!document.body.classList.contains('edit') || inField()) return;
+  const o = cur(); if(!o || !e.clipboardData) return;
+  clip = clipData([o]);
+  e.clipboardData.setData('text/plain', JSON.stringify(clip));
+  e.preventDefault(); del(); flash('cut ' + o.type);
+});
+addEventListener('paste', e => {
+  if(!document.body.classList.contains('edit') || inField()) return;
+  const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+  const d = parseClip(text) || clip;
+  if(d){ e.preventDefault(); pasteClip(d); }
+});
+/* the command-palette versions can't ride a clipboard event, so they use the
+   async API when it's allowed and fall back to the in-app buffer */
+function copyCmd(){
+  const o = cur(); if(!o) return flash('nothing selected');
+  clip = clipData([o]);
+  if(navigator.clipboard && navigator.clipboard.writeText)
+    navigator.clipboard.writeText(JSON.stringify(clip)).catch(()=>{});
+  flash('copied ' + o.type);
+}
+function pasteCmd(){
+  const fromBuf = () => clip ? pasteClip(clip) : flash('nothing to paste');
+  if(navigator.clipboard && navigator.clipboard.readText)
+    navigator.clipboard.readText().then(t => pasteClip(parseClip(t) || clip) || flash('nothing to paste')).catch(fromBuf);
+  else fromBuf();
+}
 function order(d){
   const i = doc.objects.findIndex(o => o.id === sel); if(i < 0) return;
   const j = i + d; if(j < 0 || j >= doc.objects.length) return;
@@ -1298,6 +1369,9 @@ const CMDS = [
   {n:'Add half circle',  k:'H',  f:()=>add('half')},
   {n:'Add text',         k:'T',  f:()=>add('text')},
   {n:'Duplicate',        k:'⌘D', f:dup},
+  {n:'Copy',             k:'⌘C', f:copyCmd},
+  {n:'Paste',            k:'⌘V', f:pasteCmd},
+  {n:'Cut',              k:'⌘X', f:()=>{ const o=cur(); if(!o) return flash('nothing selected'); clip=clipData([o]); if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(JSON.stringify(clip)).catch(()=>{}); del(); flash('cut '+o.type); }},
   {n:'Delete',           k:'⌫',  f:del},
   {n:'Rotate 90°',       k:'⇧R', f:rot90},
   {n:'Reset rotation',   k:'',   f:resetRot},
@@ -1374,6 +1448,7 @@ addEventListener('keydown', e => {
     return;
   }
   if(['INPUT','TEXTAREA'].includes(e.target.tagName)) return;
+  if(mod) return;                 /* any other ⌘/ctrl combo (copy, paste…) is the browser's */
 
   const edit = document.body.classList.contains('edit');
   if(k === 'e' && !edit){ mode(true); return; }
