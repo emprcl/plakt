@@ -438,20 +438,40 @@ const SNAPTOL = () => {
   const bw = document.getElementById('board').clientWidth || doc.w;
   return 7 * (doc.w / bw);                       /* ~7 screen px, whatever the zoom */
 };
+/* offsets (relative to the object's stored x/y) of the points snapping
+   reaches for. An upright box only needs its left/centre/right edge
+   (resp. top/centre/bottom) because an edge shares one coordinate across
+   both corners. Once rotated, the four corners no longer share an axis,
+   so each is tested on its own — this is what makes a rotated shape snap
+   on its actual corners instead of its invisible unrotated bounding box. */
+function snapOffsets(o, w, h){
+  if(!o || !o.rot) return { vx:[0, w/2, w], hy:[0, h/2, h] };
+  const b = localBox(o), p = pivot(o), rad = o.rot*Math.PI/180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  const pts = [[b.x,b.y],[b.x+b.w,b.y],[b.x+b.w,b.y+b.h],[b.x,b.y+b.h],[b.x+b.w/2,b.y+b.h/2]];
+  const vx = [], hy = [];
+  pts.forEach(([px,py]) => {
+    const dx = px - p.x, dy = py - p.y;
+    vx.push((p.x + dx*cos - dy*sin) - o.x);
+    hy.push((p.y + dx*sin + dy*cos) - o.y);
+  });
+  return { vx, hy };
+}
 /* snap a moving box: leading edge, centre and trailing edge each reach for
    a line; the nearest within tolerance wins and is flagged for the hot
    highlight. Manual guides light up; grid edges snap silently. */
-function snapToGuides(x, y, w, h){
+function snapToGuides(x, y, w, h, o){
   const tol = SNAPTOL(), V = snapLinesV(), H = snapLinesH(), gu = guides();
+  const { vx, hy } = snapOffsets(o, w, h);
   snapG = { v:null, h:null };
   let best = tol, hit = null;
-  [0, w/2, w].forEach(off => V.forEach(gx => {
+  vx.forEach(off => V.forEach(gx => {
     const d = Math.abs(x + off - gx);
     if(d < best){ best = d; hit = gx - off; snapG.v = gu.v.includes(gx) ? gx : null; }
   }));
   if(hit !== null) x = hit;
   best = tol; hit = null;
-  [0, h/2, h].forEach(off => H.forEach(gy => {
+  hy.forEach(off => H.forEach(gy => {
     const d = Math.abs(y + off - gy);
     if(d < best){ best = d; hit = gy - off; snapG.h = gu.h.includes(gy) ? gy : null; }
   }));
@@ -531,8 +551,8 @@ function shapeSVG(o){
     case 'text': {
       const {anchor, x} = textAnchor(o), lh = LH(o);
       const sp = wrapLines(o).map((l,i) =>
-        `<tspan x="${x}" dy="${i ? lh : 0}">${esc(l)}</tspan>`).join('');
-      return `<text ${a}${t} x="${x}" y="${o.y}" text-anchor="${anchor}" font-family="${cssFont(o.font)}" font-weight="${o.wt||400}" font-size="${o.size}" letter-spacing="${o.tr||0}">${sp}</text>`;
+        `<tspan x="${x}" dy="${i ? lh : 0}">${esc(l) || '&#160;'}</tspan>`).join('');
+      return `<text ${a}${t} x="${x}" y="${o.y}" text-anchor="${anchor}" font-family="${esc(cssFont(o.font))}" font-weight="${o.wt||400}" font-size="${o.size}" letter-spacing="${o.tr||0}">${sp}</text>`;
     }
     default:
       return `<rect ${a}${t} x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}"/>`;
@@ -647,7 +667,7 @@ function patch(o){
     el.setAttribute('x', x); el.setAttribute('y', o.y);
     el.setAttribute('text-anchor', anchor); el.setAttribute('font-size', o.size);
     el.innerHTML = wrapLines(o).map((l,i) =>
-      `<tspan x="${x}" dy="${i ? lh : 0}">${esc(l)}</tspan>`).join('');
+      `<tspan x="${x}" dy="${i ? lh : 0}">${esc(l) || '&#160;'}</tspan>`).join('');
   } else {
     el.setAttribute('x', b.x); el.setAttribute('y', b.y);
     el.setAttribute('width', b.w); el.setAttribute('height', b.h);
@@ -727,7 +747,7 @@ function objPanel(o){
            const ok = !document.fonts || document.fonts.check(`16px "${f}"`);
            const tagged = !ok ? 'NOT LOADED' : isWeb(f) ? 'WEB' : (o.font===f ? '●' : '');
            return `<div class="fw">
-             <button class="f ${o.font===f?'on':''}" data-font="${esc(f)}" style="font-family:${cssFont(f)}">${esc(f)}<i>${tagged}</i></button>
+             <button class="f ${o.font===f?'on':''}" data-font="${esc(f)}" style="font-family:${esc(cssFont(f))}">${esc(f)}<i>${tagged}</i></button>
              ${isWeb(f) ? `<button class="fx" data-rm="${esc(f)}" title="remove">×</button>` : ''}
            </div>`;
          }).join('')}
@@ -1028,7 +1048,7 @@ addEventListener('pointermove', e => {
     let rx = drag.x0 + (p.x - drag.px0), ry = drag.y0 + (p.y - drag.py0);
     const b = localBox(o);
     if(free) snapG = { v:null, h:null };
-    else [rx, ry] = snapToGuides(rx, ry, b.w, b.h);
+    else [rx, ry] = snapToGuides(rx, ry, b.w, b.h, o);
     setPos(o, rx, ry);
     if(snapG.v !== null || snapG.h !== null){
       const gl = document.getElementById('guides');
