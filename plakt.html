@@ -370,7 +370,7 @@ function removeWebfont(family){
   doc.webfonts = (doc.webfonts || []).filter(f => f !== family);
   const el = document.getElementById('gf-' + family.replace(/\W+/g,'-').toLowerCase());
   if(el) el.remove();
-  doc.objects.forEach(o => { if(o.font === family) o.font = EMBEDDED[0]; });
+  allObjects().forEach(o => { if(o.font === family) o.font = EMBEDDED[0]; });
   touch(); flash(family + ' removed');
 }
 
@@ -398,11 +398,13 @@ const $$ = s => [...document.querySelectorAll(s)];
 
 let doc     = JSON.parse($('#doc-data').textContent);
 let sel     = [], dirty = false, snap = true, drag = null, handle = null, zoom = 1;   // sel: array of selected ids
+let entered = null;   // id of the group the user has double-clicked into, or null
+let lastClick = { id: null, t: 0 };   // hand-rolled double-click detection, see the pointerdown handler
 let panX    = 0, panY = 0, spaceDown = false;
 let undoS   = [], redoS = [];
 const svgEl = $('#doc-svg');
 const CAN_WRITE = 'showSaveFilePicker' in window;
-const nextId = () => doc.objects.reduce((m,o) => Math.max(m,o.id), 0) + 1;
+const nextId = () => allObjects().reduce((m,o) => Math.max(m,o.id), 0) + 1;
 
 /* ════════════════════════════════════════════════════════════════════
    GEOMETRY — objects live in absolute document units (x, y, w, h).
@@ -517,15 +519,19 @@ const fillPct  = f => { const p = String(f).split('@')[1]; return p ? +p : 100; 
 /* ── history ─────────────────────────────────────────────────────── */
 const snapshot = () => JSON.stringify(doc);
 function commit(){ undoS.push(snapshot()); if(undoS.length > 80) undoS.shift(); redoS = []; }
+function revalidate(){
+  sel = sel.filter(id => allObjects().some(o => o.id === id));
+  entered = doc.objects.some(o => o.id === entered && o.type === 'group') ? entered : null;
+}
 function undo(){
   if(!undoS.length) return flash('nothing to undo');
   redoS.push(snapshot()); doc = JSON.parse(undoS.pop());
-  sel = sel.filter(id => doc.objects.some(o => o.id === id)); dirty = true; full();
+  revalidate(); dirty = true; full();
 }
 function redo(){
   if(!redoS.length) return flash('nothing to redo');
   undoS.push(snapshot()); doc = JSON.parse(redoS.pop());
-  sel = sel.filter(id => doc.objects.some(o => o.id === id)); dirty = true; full();
+  revalidate(); dirty = true; full();
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -548,8 +554,22 @@ function rotAttr(o){
   const p = pivot(o);
   return ` transform="rotate(${o.rot} ${p.x} ${p.y})"`;
 }
+/* a group's children are stored in its own local frame (relative to their
+   natural bounding box, pre-scale) — map that frame onto the group's
+   current x/y/w/h/rot: place+scale first, then rotate the whole thing
+   around its own centre (pivot(o), same convention as a leaf's rotAttr).
+   Shared by shapeSVG (the initial render) and patch (in-place updates
+   during drag), so both stay in lockstep with exactly one formula. */
+function groupTransform(o){
+  const cb = bboxOf(o.children), p = pivot(o);
+  const sx = cb.w > 0 ? o.w/cb.w : 1, sy = cb.h > 0 ? o.h/cb.h : 1;
+  const rot = o.rot ? `rotate(${o.rot} ${p.x} ${p.y}) ` : '';
+  return `${rot}translate(${o.x} ${o.y}) scale(${sx} ${sy}) translate(${-cb.x} ${-cb.y})`;
+}
 
 function shapeSVG(o){
+  if(o.type === 'group')
+    return `<g class="o" data-id="${o.id}" transform="${groupTransform(o)}">${o.children.map(shapeSVG).join('')}</g>`;
   const b = box(o), a = `class="o" data-id="${o.id}" fill="${fillHex(o.fill)}"`, t = rotAttr(o);
   switch(o.type){
     case 'ellipse':
@@ -632,7 +652,7 @@ const NS = 'http://www.w3.org/2000/svg';
 /* <text> only hit-tests on painted glyphs, so a click between letters falls
    through. Lay a transparent rect over each text block's real ink box. */
 function textHits(){
-  doc.objects.forEach(o => {
+  allObjects().forEach(o => {
     if(o.type !== 'text') return;
     const el = svgEl.querySelector(`[data-id="${o.id}"]`); if(!el) return;
     const b = textBox(o), p = unit()*0.3, r = document.createElementNS(NS, 'rect');
@@ -664,6 +684,7 @@ function renderSVG(){
 /* patch one object in place — never rebuild the DOM mid-interaction */
 function patch(o){
   const el = svgEl.querySelector(`[data-id="${o.id}"]`); if(!el) return;
+  if(o.type === 'group'){ el.setAttribute('transform', groupTransform(o)); return; }
   const b = box(o), t = rotAttr(o).replace(/^ transform="|"$/g,'');
   t ? el.setAttribute('transform', t) : el.removeAttribute('transform');
   if(o.type === 'ellipse'){
@@ -687,28 +708,58 @@ function patch(o){
 function localBox(o){
   return o.type === 'text' ? textBox(o) : box(o);
 }
+/* every object that exists, a group's children flattened in alongside it —
+   groups nest one level deep, so this is the whole story */
+const allObjects = () => doc.objects.flatMap(o => o.type === 'group' ? [o, ...o.children] : [o]);
+/* the list new objects join and existing ones are found in right now: the
+   whole document normally, or one group's children while drilled into it */
+const activeList = () => {
+  if(!entered) return doc.objects;
+  const g = doc.objects.find(o => o.id === entered && o.type === 'group');
+  return g ? g.children : doc.objects;
+};
+/* the group (if any) that owns this id as a direct child */
+const parentGroupOf = id => (doc.objects.find(o => o.type === 'group' && o.children.some(c => c.id === id)) || {}).id ?? null;
+
 /* the objects `sel` (an array of ids) currently points to, in stack order */
-const selectedObjs = () => sel.map(id => doc.objects.find(o => o.id === id)).filter(Boolean);
-/* the axis-aligned box enclosing every selected object's own box — used
-   to snap a multi-drag as one rigid unit instead of each member on its own */
-function groupBoxOf(ids){
-  const bs = ids.map(id => doc.objects.find(o => o.id === id)).filter(Boolean).map(localBox).filter(b => b.w > 0 && b.h > 0);
+const selectedObjs = () => sel.map(id => allObjects().find(o => o.id === id)).filter(Boolean);
+/* the axis-aligned box enclosing a set of resolved objects' own boxes —
+   used to snap a multi-drag, or a group's own bounds, as one rigid unit */
+function bboxOf(objs){
+  const bs = objs.map(localBox).filter(b => b.w > 0 && b.h > 0);
   if(!bs.length) return {x:0,y:0,w:0,h:0};
   const x0 = Math.min(...bs.map(b=>b.x)), y0 = Math.min(...bs.map(b=>b.y));
   const x1 = Math.max(...bs.map(b=>b.x+b.w)), y1 = Math.max(...bs.map(b=>b.y+b.h));
   return {x:x0, y:y0, w:x1-x0, h:y1-y0};
 }
+function groupBoxOf(ids){
+  return bboxOf(ids.map(id => allObjects().find(o => o.id === id)).filter(Boolean));
+}
 
 /* a single selected object gets full resize/rotate handles; a multi-
    selection just outlines every member — dragging any one of them still
    moves the whole group (see the 'move' branch in pointermove) */
+/* a child's stored x/y/w/h/rot are relative to its parent group's own
+   local frame — #handles is drawn in document space, so a child needs
+   its transform folded in before it can be positioned/sized like a
+   top-level object. bakeChild() already computes exactly that (it's the
+   same math ungroupSel() uses to flatten a child back to a real leaf) —
+   reuse it here as a pure, non-mutating "what this looks like in
+   document space" view. Keyed off the object's *actual* parent, not
+   `entered` — Escape backs out of a group without clearing the
+   selection, so a child can still be selected while `entered` is null. */
+function displayObj(o){
+  const pgId = parentGroupOf(o.id);
+  const pg = pgId !== null ? doc.objects.find(g => g.id === pgId) : null;
+  return pg ? bakeChild(o, pg) : o;
+}
 function marks(){
   const h = $('#handles'); if(!h) return;
   h.innerHTML = '';
   if(!document.body.classList.contains('edit')) return;
   if(sel.length > 1){
-    h.innerHTML = selectedObjs().map(o => {
-      const b = localBox(o); if(!(b.w > 0) || !(b.h > 0)) return '';
+    h.innerHTML = selectedObjs().map(o0 => {
+      const o = displayObj(o0), b = localBox(o); if(!(b.w > 0) || !(b.h > 0)) return '';
       return `<g${rotAttr(o)}>
         <rect class="sel-o" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}"/>
         <rect class="sel-i" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}"/>
@@ -716,8 +767,9 @@ function marks(){
     }).join('');
     return;
   }
-  const o = cur();
-  if(!o) return;
+  const o0 = cur();
+  if(!o0) return;
+  const o = displayObj(o0);
   const b = localBox(o);
   if(!(b.w > 0) || !(b.h > 0)) return;
   const t = rotAttr(o), u = unit(), s = u*0.6;
@@ -736,7 +788,7 @@ function marks(){
 /* cur() is the single object being edited in detail — it's null while
    nothing or more than one thing is selected; multi-select drives group
    move/delete/duplicate instead (see selectedObjs()) */
-const cur  = () => sel.length === 1 ? doc.objects.find(o => o.id === sel[0]) || null : null;
+const cur  = () => sel.length === 1 ? allObjects().find(o => o.id === sel[0]) || null : null;
 const full = () => { renderSVG(); panel(); status(); };
 const touch = () => { dirty = true; full(); };
 
@@ -753,7 +805,28 @@ function secHead(label, help='', right=''){
   return `<div class="sh"><span class="shl">${label}${q}</span>${right}</div>`;
 }
 
+/* a group has no fill/type-specific geometry of its own — just its box,
+   rotation, and an ungroup escape hatch */
+function groupPanel(o){
+  return `
+  <div class="sec">
+    ${secHead('group', 'pixels from the top-left · <b>⌥</b> or <b>ctrl</b> to bypass snapping', `<em>#${o.id}</em>`)}
+    ${num('X','x',Math.round(o.x))}
+    ${num('Y','y',Math.round(o.y))}
+  </div>
+  <div class="sec">${secHead('Transform',
+    'pixels · ROT in degrees · resizing keeps everything inside proportional')}
+    ${num('W','w',Math.round(o.w))}
+    ${num('H','h',Math.round(o.h))}
+    ${num('ROT','rot',o.rot||0)}
+  </div>
+  <div class="sec">
+    ${secHead('Group', `${o.children.length} object${o.children.length===1?'':'s'} inside · double-click one to edit it directly`)}
+    <button class="alb" id="ungroupBtn" style="width:auto;padding:5px 10px">⇧⌘G UNGROUP</button>
+  </div>`;
+}
 function objPanel(o){
+  if(o.type === 'group') return groupPanel(o);
   const sw = doc.palette.map(s => `
     <button class="sw ${fillSlot(o.fill)===s.id?'on':''}" data-slot="${s.id}">
       <span class="ch" style="background:${s.hex}"></span><span class="nm">${s.id}</span>
@@ -816,7 +889,7 @@ function objPanel(o){
       <label class="ch" style="background:${slotHex(fillSlot(o.fill))};cursor:pointer;width:15px;height:15px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)">
         <input type="color" value="${slotHex(fillSlot(o.fill))}" data-edit="${fillSlot(o.fill)}">
       </label>
-      <span class="tip" style="margin:0">edit <b>${fillSlot(o.fill)}</b> — used by ${doc.objects.filter(x => fillSlot(x.fill) === fillSlot(o.fill)).length}</span>
+      <span class="tip" style="margin:0">edit <b>${fillSlot(o.fill)}</b> — used by ${allObjects().filter(x => fillSlot(x.fill) === fillSlot(o.fill)).length}</span>
     </div>
     <div class="tints">${tints}</div>
   </div>`;
@@ -826,18 +899,21 @@ let tab = 'artboard';
 
 function docPanel(){
   if(tab === 'layers'){
-    const layers = [...doc.objects].reverse().map(o => `
-      <button class="ly ${sel.includes(o.id)?'on':''}" data-pick="${o.id}">
-        <span class="ch" style="background:${fillHex(o.fill)}"></span>
-        <span class="t">${o.type === 'text' ? esc(o.str.split('\n')[0].slice(0,18)) : o.type}</span>
+    const row = (o, parent) => `
+      <button class="ly ${sel.includes(o.id)?'on':''}" data-pick="${o.id}"${parent!=null ? ` data-parent="${parent}" style="padding-left:26px"` : ''}>
+        <span class="ch" style="${o.type==='group' ? 'background:transparent;box-shadow:inset 0 0 0 1px var(--hair)' : `background:${fillHex(o.fill)}`}"></span>
+        <span class="t">${o.type === 'group' ? 'group' : o.type === 'text' ? esc(o.str.split('\n')[0].slice(0,18)) : o.type}</span>
         <span class="x">#${o.id}</span>
-      </button>`).join('') || '<div class="tip" style="margin:0">nothing on the artboard yet</div>';
+      </button>`;
+    const layers = [...doc.objects].reverse().map(o =>
+      row(o, null) + (o.type === 'group' ? [...o.children].reverse().map(c => row(c, o.id)).join('') : '')
+    ).join('') || '<div class="tip" style="margin:0">nothing on the artboard yet</div>';
     return `<div class="sec" style="border:0">
       ${secHead('Stack', 'topmost first · <b>[</b> and <b>]</b> reorder the selection · <b>⇧</b> click to add', '<em>top first</em>')}${layers}
     </div>`;
   }
 
-  const used = id => doc.objects.filter(o => fillSlot(o.fill) === id).length;
+  const used = id => allObjects().filter(o => fillSlot(o.fill) === id).length;
   const sw = doc.palette.map(s => `
     <div class="sw">
       <label class="ch" style="background:${s.hex};cursor:pointer">
@@ -892,6 +968,7 @@ function multiPanel(){
       `<em>${sel.length} objects</em>`)}
     <div class="tip" style="margin:0">${kinds}</div>
     <div class="r" style="margin-top:8px">
+      <button class="alb" id="msGroup" style="width:auto;padding:5px 10px">⌘G GROUP</button>
       <button class="alb" id="msDup" style="width:auto;padding:5px 10px">⌘D DUPLICATE</button>
       <button class="alb" id="msDel" style="width:auto;padding:5px 10px">⌫ DELETE</button>
     </div>
@@ -998,11 +1075,18 @@ function wire(){
   });
   $$('#panel .ly[data-pick]').forEach(b => b.onclick = e => {
     const id = +b.dataset.pick;
-    sel = e.shiftKey ? (sel.includes(id) ? sel.filter(s => s !== id) : [...sel, id]) : [id];
+    const parent = b.dataset.parent ? +b.dataset.parent : null;
+    if(e.shiftKey && parent === entered){
+      sel = sel.includes(id) ? sel.filter(s => s !== id) : [...sel, id];
+    } else {
+      entered = parent; sel = [id];
+    }
     tab = 'selection'; full();
   });
+  const msGroup = $('#msGroup'); if(msGroup) msGroup.onclick = groupSel;
   const msDup = $('#msDup'); if(msDup) msDup.onclick = dup;
   const msDel = $('#msDel'); if(msDel) msDel.onclick = del;
+  const ungroupBtn = $('#ungroupBtn'); if(ungroupBtn) ungroupBtn.onclick = ungroupSel;
 
   const ts = $('#tstr');
   if(ts){
@@ -1045,11 +1129,14 @@ const toSvg = e => {
   const m = svgEl.getScreenCTM().inverse();
   return new DOMPoint(e.clientX, e.clientY).matrixTransform(m);
 };
+/* rotate point p around centre c by deg degrees */
+function rotP(p, c, deg){
+  const a = deg*Math.PI/180, dx = p.x-c.x, dy = p.y-c.y;
+  return { x: c.x + dx*Math.cos(a) - dy*Math.sin(a), y: c.y + dx*Math.sin(a) + dy*Math.cos(a) };
+}
 /* pointer into the object's own unrotated frame */
 function unrot(p, o){
-  if(!o.rot) return p;
-  const c = pivot(o), a = -o.rot*Math.PI/180, dx = p.x-c.x, dy = p.y-c.y;
-  return { x: c.x + dx*Math.cos(a) - dy*Math.sin(a), y: c.y + dx*Math.sin(a) + dy*Math.cos(a) };
+  return o.rot ? rotP(p, pivot(o), -o.rot) : p;
 }
 
 function startGuide(axis, index){ drag = { mode:'guide', axis, index, moved:false }; }
@@ -1073,10 +1160,12 @@ svgEl.addEventListener('pointerdown', e => {
 
   const h = e.target.closest('[data-h]');
   if(h && cur()){
-    const o = cur(), c = pivot(o);
+    const o = cur(), c = pivot(o), lp = localPoint(p);   /* o's own x/y/w/h/rot live in its parent's
+                                                              frame while entered — the pointer needs
+                                                              converting into that same frame */
     commit();
     drag = h.dataset.h === 'rot'
-      ? { mode:'rot', o, c, a0: Math.atan2(p.y-c.y, p.x-c.x)*180/Math.PI, r0: o.rot||0, moved:false }
+      ? { mode:'rot', o, c, a0: Math.atan2(lp.y-c.y, lp.x-c.x)*180/Math.PI, r0: o.rot||0, moved:false }
       : { mode:'scale', o, k: h.dataset.h, b: localBox(o), moved:false };
     return;
   }
@@ -1084,27 +1173,58 @@ svgEl.addEventListener('pointerdown', e => {
   const t = e.target.closest('[data-id],[data-hit]');
   if(!t){
     /* empty canvas: a plain click clears the selection (as before); a
-       drag from here rubber-bands a marquee. ⇧ keeps what's already
-       selected and adds whatever the marquee covers. */
+       drag from here rubber-bands a marquee, scoped to whatever group (if
+       any) is currently entered — like Figma, an empty click/drag never
+       exits isolation on its own, only Escape or clicking a genuinely
+       different object does (see the branch below and the stage-margin
+       click handler). ⇧ keeps what's already selected and adds whatever
+       the marquee covers. */
     if(!e.shiftKey) sel = [];
     drag = { mode:'marquee', base:[...sel], px0:p.x, py0:p.y, moved:false };
     marks(); panel();
     return;
   }
 
-  const id = +(t.dataset.id ?? t.dataset.hit);
+  const rawId = +(t.dataset.id ?? t.dataset.hit);
+  const pg = parentGroupOf(rawId);
+
   if(e.shiftKey){
+    /* shift-click is a distinct, unambiguous gesture (multi-select toggle)
+       — it must never arm double-click detection below, or an unrelated
+       plain click on the same object shortly after gets misread as
+       drilling into a group instead of dragging it */
+    const insideEntered = pg !== null && pg === entered;
+    const id = insideEntered ? rawId : (pg ?? rawId);
+    if(!insideEntered) entered = null;
     sel = sel.includes(id) ? sel.filter(s => s !== id) : [...sel, id];
     tab = 'selection'; marks(); panel();
     return;                        /* toggle only — drag needs a fresh press */
   }
+
+  /* a click on a group's member resolves to the group itself, unless
+     we're already drilled into that exact group — then it resolves to the
+     member directly. Clicking anything else exits the group we were in.
+     Double-click drills in: hand-rolled rather than the browser's native
+     dblclick, because a plain click can end in a full renderSVG() rebuild
+     (see endDrag below) that replaces the very DOM node the browser
+     tracks for double-click timing, making native dblclick unreliable
+     here. */
+  const now = performance.now();
+  const isDbl = pg !== null && rawId === lastClick.id && now - lastClick.t < 400;
+  lastClick = { id: rawId, t: now };
+  const insideEntered = pg !== null && pg === entered;
+  const id = (isDbl || insideEntered) ? rawId : (pg ?? rawId);
+  if(isDbl) entered = pg;
+  else if(!insideEntered) entered = null;
+
   /* clicking a fresh object replaces the selection; clicking a member of
      an existing multi-selection keeps the group so it can be dragged as one */
   if(!sel.includes(id)) sel = [id];
   tab = 'selection';
   commit();
   const objs = selectedObjs().map(o => ({ o, x0:o.x, y0:o.y }));
-  drag = { mode:'move', objs, groupBox: groupBoxOf(sel), px0:p.x, py0:p.y, moved:false };
+  const lp = localPoint(p);
+  drag = { mode:'move', objs, groupBox: groupBoxOf(sel), px0:lp.x, py0:lp.y, moved:false };
   marks(); panel();
 });
 
@@ -1123,9 +1243,21 @@ addEventListener('pointermove', e => {
   if(drag.mode === 'marquee'){
     const x0 = Math.min(drag.px0, p.x), x1 = Math.max(drag.px0, p.x);
     const y0 = Math.min(drag.py0, p.y), y1 = Math.max(drag.py0, p.y);
-    const hit = doc.objects.filter(o => {
+    /* the marquee itself is always in document space (it's drawn on top of
+       everything); but while entered in a group its children live in that
+       group's own local frame, so the hit-test box needs the inverse of
+       the group's transform — walking all 4 corners through it, since a
+       rotated group's local frame isn't axis-aligned with the document's */
+    let bx0 = x0, by0 = y0, bx1 = x1, by1 = y1;
+    const g = entered !== null && doc.objects.find(o => o.id === entered);
+    if(g){
+      const pts = [[x0,y0],[x1,y0],[x1,y1],[x0,y1]].map(([x,y]) => docToLocal({x,y}, g));
+      bx0 = Math.min(...pts.map(q=>q.x)); bx1 = Math.max(...pts.map(q=>q.x));
+      by0 = Math.min(...pts.map(q=>q.y)); by1 = Math.max(...pts.map(q=>q.y));
+    }
+    const hit = activeList().filter(o => {
       const b = localBox(o);
-      return b.x < x1 && b.x + b.w > x0 && b.y < y1 && b.y + b.h > y0;
+      return b.x < bx1 && b.x + b.w > bx0 && b.y < by1 && b.y + b.h > by0;
     }).map(o => o.id);
     sel = e.shiftKey ? [...new Set([...drag.base, ...hit])] : hit;
     $('#marquee').innerHTML = `<rect x="${x0}" y="${y0}" width="${x1-x0}" height="${y1-y0}"/>`;
@@ -1134,8 +1266,13 @@ addEventListener('pointermove', e => {
   }
 
   if(drag.mode === 'move'){
-    const free = !snap || e.altKey || e.ctrlKey;   /* ⌥ or ctrl */
-    let dx = p.x - drag.px0, dy = p.y - drag.py0;
+    /* ⌥/ctrl bypass snapping on purpose; being drilled into a group forces
+       it too — a child's x/y are in the group's local frame, not the
+       document's, so comparing them against doc-space guide lines is
+       meaningless (see snapToGuides/snapV/snapH, all absolute-space) */
+    const free = !snap || e.altKey || e.ctrlKey || entered !== null;
+    const lp = localPoint(p);
+    let dx = lp.x - drag.px0, dy = lp.y - drag.py0;
     if(drag.objs.length === 1){
       const { o, x0, y0 } = drag.objs[0];
       let rx = x0 + dx, ry = y0 + dy;
@@ -1161,7 +1298,7 @@ addEventListener('pointermove', e => {
     return;
   }
 
-  const o = drag.o, free = !snap || e.altKey || e.ctrlKey;   /* ⌥ or ctrl — rot/scale only */
+  const o = drag.o, free = !snap || e.altKey || e.ctrlKey || entered !== null;   /* rot/scale only; see the move branch above for why `entered` forces free */
 
   if(drag.mode === 'guide'){
     const g = guides();
@@ -1170,13 +1307,14 @@ addEventListener('pointermove', e => {
     return;
 
   } else if(drag.mode === 'rot'){
-    const a = Math.atan2(p.y - drag.c.y, p.x - drag.c.x)*180/Math.PI;
+    const lp = localPoint(p);   /* drag.c (pivot(o)) is in o's own frame — match it */
+    const a = Math.atan2(lp.y - drag.c.y, lp.x - drag.c.x)*180/Math.PI;
     let r = drag.r0 + (a - drag.a0);
     r = free ? Math.round(r) : Math.round(r/15)*15;
     o.rot = ((Math.round(r) % 360) + 360) % 360;
 
   } else {                                   /* scale */
-    let q = unrot(p, o);
+    let q = unrot(localPoint(p), o);
     /* snap the dragged corner to the grid/guides, but only for an upright
        box — a rotated corner has no meaning against document-space lines */
     if(!free && !o.rot){ q = { x: snapV(q.x), y: snapH(q.y) }; }
@@ -1186,6 +1324,14 @@ addEventListener('pointermove', e => {
     if(o.type === 'text'){
       o.w = Math.round(Math.max(o.size * .6, Math.abs(q.x - ax)));
       if(k.includes('w')) setPos(o, ax - o.w, o.y);
+    } else if(o.type === 'group'){
+      /* a non-uniform scale would shear a rotated child — not something
+         our flat leaf model can represent if this group is later
+         ungrouped, so a group always resizes proportionally */
+      const s = Math.max(Math.abs(q.x - ax) / drag.b.w, Math.abs(q.y - ay) / drag.b.h);
+      o.w = Math.max(1, Math.round(drag.b.w * s));
+      o.h = Math.max(1, Math.round(drag.b.h * s));
+      setPos(o, k.includes('w') ? ax - o.w : ax, k.includes('n') ? ay - o.h : ay);
     } else {
       o.w = Math.max(1, Math.round(Math.abs(q.x - ax)));
       o.h = Math.max(1, Math.round(Math.abs(q.y - ay)));
@@ -1238,20 +1384,100 @@ function add(type){
   : type === 'half'    ? {...base, type:'half', h: Math.round(doc.h/6)}
   : type === 'ellipse' ? {...base, type:'ellipse'}
   : {...base, type:'rect'};
-  doc.objects.push(o); sel = [o.id]; tab = 'selection'; touch();
+  activeList().push(o); sel = [o.id]; tab = 'selection'; touch();
+}
+/* fresh id(s) + an x/y offset — for a group, deep-clones its children with
+   their own fresh ids too (they must never alias the original's array, or
+   duplicating/pasting a group corrupts both copies and collides data-ids) */
+function cloneObj(o, dx, dy){
+  let next = nextId() - 1;
+  const freshId = () => ++next;
+  const c = { ...o, id: freshId(), x: (o.x||0)+dx, y: (o.y||0)+dy };
+  if(o.type === 'group') c.children = o.children.map(ch => ({ ...ch, id: freshId() }));
+  return c;
 }
 function dup(){
   const objs = selectedObjs(); if(!objs.length) return; commit();
-  const off = Math.round(Math.max(doc.w,doc.h)/40);
-  sel = objs.map(o => {
-    const c = {...o, id:nextId(), x:o.x+off, y:o.y+off};
-    doc.objects.push(c); return c.id;
-  });
+  const off = Math.round(Math.max(doc.w,doc.h)/40), list = activeList();
+  sel = objs.map(o => { const c = cloneObj(o, off, off); list.push(c); return c.id; });
   touch();
 }
 function del(){
   if(!sel.length) return; commit();
-  doc.objects = doc.objects.filter(o => !sel.includes(o.id)); sel = []; touch();
+  const list = activeList(), kept = list.filter(o => !sel.includes(o.id));
+  list.length = 0; list.push(...kept);
+  sel = []; touch();
+}
+/* ── grouping ────────────────────────────────────────────────────────
+   One level deep: a group holds ordinary objects, never another group.
+   Children are stored relative to the group's own local origin (real SVG
+   nested-<g> semantics — see groupTransform); grouping rebases them once,
+   ungrouping bakes the group's transform back into flat leaves. */
+function groupSel(){
+  const objs = selectedObjs();
+  if(objs.length < 2) return flash('select at least 2 objects to group');
+  if(objs.some(o => o.type === 'group')) return flash("can't group a group — ungroup it first");
+  if(entered !== null) return flash("can't group while inside a group");
+  commit();
+  const list = activeList(), b = bboxOf(objs);
+  const topIdx = Math.max(...objs.map(o => list.indexOf(o)));
+  const children = objs.map(o => ({ ...o, x: o.x - b.x, y: o.y - b.y }));
+  const kept = list.filter(o => !sel.includes(o.id));
+  const group = { id: nextId(), type:'group', x:b.x, y:b.y, w:b.w, h:b.h, rot:0, children };
+  kept.splice(Math.min(topIdx, kept.length), 0, group);
+  list.length = 0; list.push(...kept);
+  sel = [group.id]; tab = 'selection'; touch();
+}
+/* map a point in a group's local (pre-transform) frame to document space —
+   the point-based twin of groupTransform's SVG-string version, same order:
+   place+scale first, then rotate the whole thing around the group's centre */
+function localToDoc(p, g, cb, s){
+  const q = { x: g.x + (p.x-cb.x)*s, y: g.y + (p.y-cb.y)*s };
+  return g.rot ? rotP(q, pivot(g), g.rot) : q;
+}
+/* a document-space pointer point into whatever coordinate frame the
+   current drag target actually lives in — its own, if we're drilled
+   into a group (a child's x/y/w/h/rot are relative to that frame, so
+   every drag computation below needs the pointer in the same space) */
+function localPoint(p){
+  if(entered === null) return p;
+  const g = doc.objects.find(o => o.id === entered && o.type === 'group');
+  return g ? docToLocal(p, g) : p;
+}
+/* the inverse of localToDoc — a document-space point into a group's own
+   local frame, e.g. for hit-testing a marquee against its children */
+function docToLocal(p, g){
+  const cb = bboxOf(g.children), s = cb.w > 0 ? g.w/cb.w : 1;
+  const q = g.rot ? rotP(p, pivot(g), -g.rot) : p;
+  return { x: cb.x + (q.x-g.x)/s, y: cb.y + (q.y-g.y)/s };
+}
+/* fold a group's transform into one child, producing a flat leaf with the
+   same x/y/w/h/rot conventions every top-level object already uses. Group
+   resize is constrained to uniform scale (see the 'scale' pointermove
+   guard), so a single factor s is exact here — a non-uniform scale can't
+   be represented by a flat rot-only leaf. */
+function bakeChild(c, g){
+  const cb = bboxOf(g.children), s = cb.w > 0 ? g.w/cb.w : 1;
+  const pv = localToDoc(pivot(c), g, cb, s);
+  const rot = (((c.rot||0) + g.rot) % 360 + 360) % 360;
+  const baked = { ...c, rot, w: c.w*s, h: c.h*s };
+  if(c.type === 'text'){
+    baked.x = pv.x; baked.y = pv.y; baked.size = c.size*s;
+    if(c.lh > 0) baked.lh = c.lh*s;
+    if(c.tr)     baked.tr = c.tr*s;
+  } else {
+    baked.x = pv.x - baked.w/2; baked.y = pv.y - baked.h/2;
+  }
+  return baked;
+}
+function ungroupSel(){
+  const g = cur();
+  if(!g || g.type !== 'group') return flash('select a group to ungroup');
+  commit();
+  const list = activeList(), idx = list.indexOf(g);
+  const baked = g.children.map(c => bakeChild(c, g));
+  list.splice(idx, 1, ...baked);
+  sel = baked.map(o => o.id); tab = 'selection'; touch();
 }
 
 /* ── clipboard ───────────────────────────────────────────────────────
@@ -1263,7 +1489,7 @@ let clip = null;
 function clipData(objs){
   const ids = new Set(objs.map(o => fillSlot(o.fill)));
   return { plakt:'clip', v:1,
-    objects: objs.map(o => ({...o})),
+    objects: objs.map(o => o.type === 'group' ? {...o, children: o.children.map(c => ({...c}))} : {...o}),
     palette: doc.palette.filter(p => ids.has(p.id)).map(p => ({...p})) };
 }
 function parseClip(text){
@@ -1274,13 +1500,12 @@ function parseClip(text){
 }
 function pasteClip(d){
   if(!d || !Array.isArray(d.objects) || !d.objects.length) return false;
+  if(entered !== null && d.objects.some(o => o.type === 'group'))
+    return flash("can't paste a group while inside a group") || false;
   commit();
   (d.palette || []).forEach(p => { if(!doc.palette.some(q => q.id === p.id)) doc.palette.push({...p}); });
-  const off = Math.round(Math.max(doc.w,doc.h)/40);
-  const pasted = d.objects.map(src => {
-    const o = {...src, id: nextId(), x:(src.x||0)+off, y:(src.y||0)+off};
-    doc.objects.push(o); return o.id;
-  });
+  const off = Math.round(Math.max(doc.w,doc.h)/40), list = activeList();
+  const pasted = d.objects.map(src => { const o = cloneObj(src, off, off); list.push(o); return o.id; });
   sel = pasted; tab = 'selection'; touch(); flash('pasted');
   return true;
 }
@@ -1325,12 +1550,16 @@ function pasteCmd(){
 }
 function order(d){
   if(sel.length !== 1) return;                  /* reordering a multi-selection is ambiguous */
-  const i = doc.objects.findIndex(o => o.id === sel[0]); if(i < 0) return;
-  const j = i + d; if(j < 0 || j >= doc.objects.length) return;
-  commit(); [doc.objects[i], doc.objects[j]] = [doc.objects[j], doc.objects[i]]; touch();
+  const list = activeList(), i = list.findIndex(o => o.id === sel[0]); if(i < 0) return;
+  const j = i + d; if(j < 0 || j >= list.length) return;
+  commit(); [list[i], list[j]] = [list[j], list[i]]; touch();
 }
+/* these four position/align a single object against the *document's*
+   edges/grid/guides — meaningless for a child of an entered group, whose
+   x/y live in the group's own local frame, not the document's */
 function centre(axis){
-  const o = cur(); if(!o) return; commit();
+  const o = cur(); if(!o) return; if(entered !== null) return flash("can't align — you're inside a group");
+  commit();
   const b = localBox(o);                             /* text box left edge == o.x */
   if(axis === 'x') setPos(o, o.x + ((doc.w - b.w)/2 - b.x), o.y);
   else             setPos(o, o.x, o.y + ((doc.h - b.h)/2 - b.y));
@@ -1338,19 +1567,23 @@ function centre(axis){
 }
 function guidesFromSel(){
   const o = cur(); if(!o) return flash('select something first');
+  if(entered !== null) return flash("can't add guides — you're inside a group");
   commit();
   const b = localBox(o), g = guides();
   [b.x, b.x + b.w].forEach(x => { if(!g.v.includes(Math.round(x))) g.v.push(Math.round(x)); });
   [b.y, b.y + b.h].forEach(y => { if(!g.h.includes(Math.round(y))) g.h.push(Math.round(y)); });
   touch(); flash('guides added on all four edges');
 }
-function snapSel(){ const o = cur(); if(!o) return; commit();
+function snapSel(){
+  const o = cur(); if(!o) return; if(entered !== null) return flash("can't snap — you're inside a group");
+  commit();
   const b = localBox(o), nx = nearest(snapLinesV(), b.x), ny = nearest(snapLinesH(), b.y);
   setPos(o, o.x + (nx - b.x), o.y + (ny - b.y)); touch(); }
 function rot90(){ const o = cur(); if(!o) return; commit(); o.rot = ((o.rot||0) + 90) % 360; touch(); }
 function resetRot(){ const o = cur(); if(!o) return; commit(); o.rot = 0; touch(); }
 function fitWidth(){
   const o = cur(); if(!o || o.type === 'text') return;
+  if(entered !== null) return flash("can't fit — you're inside a group");
   const m = doc.margin||0;
   commit(); o.x = m; o.w = doc.w - 2*m; touch();
 }
@@ -1366,7 +1599,7 @@ function renameSwatch(oldId, raw){
   if(doc.palette.some(p => p.id === id)) return flash('a swatch named ' + id + ' already exists'), full();
   commit();
   doc.palette.find(p => p.id === oldId).id = id;
-  doc.objects.forEach(o => {                       // keep every reference pointing home
+  allObjects().forEach(o => {                       // keep every reference pointing home
     if(fillSlot(o.fill) === oldId){
       const p = fillPct(o.fill);
       o.fill = id + (p < 100 ? '@' + p : '');
@@ -1377,7 +1610,7 @@ function renameSwatch(oldId, raw){
 function delSwatch(id){
   if(doc.palette[0] && doc.palette[0].id === id) return flash('the first swatch is the background — it can’t be removed');
   if(doc.palette.length <= 2) return flash('keep at least two swatches');
-  if(doc.objects.some(o => fillSlot(o.fill) === id)) return flash(id + ' is in use — recolour those objects first');
+  if(allObjects().some(o => fillSlot(o.fill) === id)) return flash(id + ' is in use — recolour those objects first');
   commit();
   doc.palette = doc.palette.filter(p => p.id !== id);
   touch();
@@ -1493,7 +1726,7 @@ async function exportPNG(scale){
    ═══════════════════════════════════════════════════════════════════ */
 function mode(on){
   document.body.classList.toggle('edit', on);
-  if(!on) sel = [];
+  if(!on){ sel = []; entered = null; }
   marks(); panel(); status();
 }
 function status(){
@@ -1513,6 +1746,8 @@ const CMDS = [
   {n:'Add half circle',  k:'H',  f:()=>add('half')},
   {n:'Add text',         k:'T',  f:()=>add('text')},
   {n:'Duplicate',        k:'⌘D', f:dup},
+  {n:'Group',            k:'⌘G', f:groupSel},
+  {n:'Ungroup',          k:'⇧⌘G',f:ungroupSel},
   {n:'Copy',             k:'⌘C', f:copyCmd},
   {n:'Paste',            k:'⌘V', f:pasteCmd},
   {n:'Cut',              k:'⌘X', f:()=>{ const objs=selectedObjs(); if(!objs.length) return flash('nothing selected'); clip=clipData(objs); if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(JSON.stringify(clip)).catch(()=>{}); del(); flash('cut '+objs.length+(objs.length===1?' '+objs[0].type:' objects')); }},
@@ -1534,7 +1769,7 @@ const CMDS = [
   {n:'Add palette swatch', k:'', f:addSwatch},
   {n:'Rename plakt',     k:'',   f:()=>{ sel=[]; tab='artboard'; panel(); const i=$('#docname'); if(i){i.focus();i.select();} }},
   {n:'Load sample plakt', k:'', f:sample},
-  {n:'Clear artboard',   k:'',   f:()=>{commit();doc.objects=[];sel=[];touch()}},
+  {n:'Clear artboard',   k:'',   f:()=>{commit();doc.objects=[];sel=[];entered=null;touch()}},
   {n:'Export PNG @1x',   k:'',   f:()=>exportPNG(1)},
   {n:'Export PNG @2x',   k:'',   f:()=>exportPNG(2)},
   {n:'Export PNG @4x',   k:'',   f:()=>exportPNG(4)},
@@ -1555,7 +1790,7 @@ function sample(){
     {id:6,type:'text',x:134,y:1389,w:932,al:'l',str:'AUSSTELLUNG',font:'Poppins',size:60,tr:10,wt:500,lh:0,fill:'INK'},
     {id:7,type:'text',x:134,y:1464,w:932,al:'l',str:'WEIMAR · JULI—SEPT',font:'Poppins',size:60,tr:10,wt:500,lh:0,fill:'RED'}
   ];
-  sel = []; touch();
+  sel = []; entered = null; touch();
 }
 
 /* ── command palette ─────────────────────────────────────────────── */
@@ -1583,6 +1818,7 @@ addEventListener('keydown', e => {
   if(mod && k === 's'){ e.preventDefault(); save(); return; }
   if(mod && k === 'z'){ e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if(mod && k === 'd'){ e.preventDefault(); dup(); return; }
+  if(mod && k === 'g'){ e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); return; }
   if(mod && k === '0'){ e.preventDefault(); resetView(); return; }
 
   if(open){
@@ -1597,7 +1833,12 @@ addEventListener('keydown', e => {
 
   const edit = document.body.classList.contains('edit');
   if(k === 'e' && !edit){ mode(true); return; }
-  if(e.key === 'Escape'){ if(sel.length){ sel = []; marks(); panel(); } else mode(false); return; }
+  if(e.key === 'Escape'){
+    if(entered !== null){ entered = null; marks(); panel(); }
+    else if(sel.length){ sel = []; marks(); panel(); }
+    else mode(false);
+    return;
+  }
   if(!edit) return;
 
   if(e.shiftKey && k === 'r'){ rot90(); return; }
@@ -1628,7 +1869,7 @@ $('#stage').addEventListener('dblclick', () => { if(!document.body.classList.con
 /* click the stage margin — anywhere off the artboard — to clear the selection */
 $('#stage').addEventListener('pointerdown', e => {
   if(!document.body.classList.contains('edit') || e.target.closest('#board')) return;
-  if(sel.length){ sel = []; marks(); panel(); }
+  if(sel.length || entered !== null){ sel = []; entered = null; marks(); panel(); }
 });
 /* ── zoom + pan ──────────────────────────────────────────────────────
    ⌃/⌘ + scroll zooms the artboard in place. A trackpad pinch is reported
