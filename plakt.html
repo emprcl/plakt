@@ -725,12 +725,29 @@ function textAnchor(o){
   const [anchor, f] = ALIGN[o.al || 'l'];
   return { anchor, x: o.x + o.w * f };
 }
+/* wrapLines() only ever breaks between words — a single word wider than
+   o.w has nowhere to break, so it renders past the box edge. textBox()
+   is what drives the selection outline, resize handles, click hit-area
+   and alignment/snapping math, so it needs to grow to actually enclose
+   that overflow rather than staying clamped to the nominal o.w — in
+   whichever direction the current alignment overflows into (centered
+   text overflows both ways, right-aligned overflows to the left). */
 function textBox(o){
   const lines = wrapLines(o), lh = LH(o), asc = o.size * .78;
+  const {anchor, x: ax} = textAnchor(o);
+  MC.font = `${o.wt||400} ${o.size}px ${cssFont(o.font)}`;
+  const lineW = s => MC.measureText(s).width + (o.tr||0) * Math.max(0, s.length - 1);
+  const spans = lines.map(l => {
+    const w = lineW(l);
+    const start = anchor === 'start' ? ax : anchor === 'end' ? ax - w : ax - w/2;
+    return [start, start + w];
+  });
+  const x0 = Math.min(o.x, ...spans.map(s => s[0]));
+  const x1 = Math.max(o.x + o.w, ...spans.map(s => s[1]));
   return {
-    x: o.x,
+    x: x0,
     y: o.y - asc,
-    w: o.w,
+    w: x1 - x0,
     h: asc + lh * (lines.length - 1) + o.size * .26
   };
 }

@@ -41,6 +41,35 @@ test.describe('regression: blank lines inside a text object', () => {
   });
 });
 
+test.describe('regression: text selection box grows to fit overflowing text', () => {
+  test.beforeEach(async ({ page }) => { await openApp(page); });
+
+  test('a word wider than the text box grows the selection/hit box instead of staying clamped to o.w', async ({ page }) => {
+    const id = await addShape(page, 't');
+    await page.evaluate(id => { const o = doc.objects.find(o => o.id === id); o.size = 20; o.str = 'hi'; o.w = 300; touch(); }, id);
+    const fitBox = await page.evaluate(id => localBox(doc.objects.find(o => o.id === id)), id);
+    expect(fitBox.w).toBeCloseTo(300, 0);
+
+    await page.evaluate(id => { const o = doc.objects.find(o => o.id === id); o.str = 'SUPERCALIFRAGILISTICEXPIALIDOCIOUS'; touch(); }, id);
+    const overflowBox = await page.evaluate(id => localBox(doc.objects.find(o => o.id === id)), id);
+    expect(overflowBox.w).toBeGreaterThan(300);
+  });
+
+  test('overflow grows the box in the correct direction for every alignment', async ({ page }) => {
+    const id = await addShape(page, 't');
+    await page.evaluate(id => { const o = doc.objects.find(o => o.id === id); o.str = 'SUPERCALIFRAGILISTIC'; touch(); }, id);
+    const textEl = page.locator(`[data-id="${id}"]`);
+
+    for (const al of ['l', 'c', 'r']) {
+      await page.evaluate(({ id, al }) => { const o = doc.objects.find(o => o.id === id); o.al = al; touch(); }, { id, al });
+      const tb = await textEl.boundingBox();
+      const sb = await page.locator('#handles .sel-o').boundingBox();
+      expect(sb.x).toBeLessThanOrEqual(tb.x + 1);
+      expect(sb.x + sb.width).toBeGreaterThanOrEqual(tb.x + tb.width - 1);
+    }
+  });
+});
+
 test.describe('regression: snapping follows a rotated shape\'s real corners', () => {
   test.beforeEach(async ({ page }) => { await openApp(page); });
 
