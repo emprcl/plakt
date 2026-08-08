@@ -154,6 +154,10 @@ body.edit #panel{transform:none}
 .fx:hover{color:#fff}
 .u{color:var(--faint);font-size:9px;letter-spacing:.1em}
 .n{width:56px}
+.sel{background:var(--chrome2);border:1px solid transparent;color:var(--ink);padding:3px 6px;
+  width:100%;letter-spacing:.06em;cursor:pointer}
+.sel:hover{border-color:var(--hair)}
+.sel:focus{outline:none;border-color:var(--dim)}
 .tx{background:var(--chrome2);border:1px solid transparent;color:var(--ink);padding:5px 7px;
   width:100%;resize:none;line-height:1.5}
 .tx:focus{outline:none;border-color:var(--dim)}
@@ -633,10 +637,19 @@ function dashAttr(o){
   if(o.dash === 'dotted') return ` stroke-dasharray="${w*0.01} ${w*2.2}" stroke-linecap="round"`;
   return ` stroke-dasharray="${w*3} ${w*2}"`;
 }
+/* the choices offered in a group's BLEND dropdown — CSS mix-blend-mode
+   values, curated down to the common/useful ones */
+const BLENDS = ['normal','multiply','screen','overlay','darken','lighten','difference','exclusion'];
+/* a group's blend mode only means anything with isolation:isolate — without
+   it, each child would blend individually with whatever's directly behind
+   IT (including its own siblings), instead of the whole group compositing
+   first and blending as one unit against what's behind the group itself */
+const blendAttr = o => (o.blend && o.blend !== 'normal')
+  ? ` style="mix-blend-mode:${o.blend};isolation:isolate"` : '';
 
 function shapeSVG(o){
   if(o.type === 'group')
-    return `<g class="o" data-id="${o.id}"${opAttr(o)} transform="${groupTransform(o)}">${o.children.map(shapeSVG).join('')}</g>`;
+    return `<g class="o" data-id="${o.id}"${opAttr(o)}${blendAttr(o)} transform="${groupTransform(o)}">${o.children.map(shapeSVG).join('')}</g>`;
   const b = box(o), t = rotAttr(o);
   if(o.type === 'line')                // a stroke, not a fill — no palette-fill attribute at all
     return `<line class="o" data-id="${o.id}"${t}${opAttr(o)} x1="${b.x}" y1="${b.y}" x2="${b.x+b.w}" y2="${b.y+b.h}" stroke="${fillPaint(o.fill)}" stroke-width="${o.sw||2}" stroke-linecap="round"${dashAttr(o)} pointer-events="stroke"/>`;
@@ -926,6 +939,12 @@ function groupPanel(o){
     ${num('H','h',Math.round(o.h))}
     ${num('ROT','rot',o.rot||0)}
     ${num('OPACITY','op',o.op??100)}
+  </div>
+  <div class="sec">
+    ${secHead('Blend', "blends the group's rendered result as one unit against what's behind it — not each shape individually")}
+    <select class="sel" data-blend>
+      ${BLENDS.map(b => `<option value="${b}"${(o.blend||'normal')===b?' selected':''}>${b.toUpperCase()}</option>`).join('')}
+    </select>
   </div>
   <div class="sec">
     ${secHead('Group', `${o.children.length} object${o.children.length===1?'':'s'} inside · double-click one to edit it directly`)}
@@ -1377,6 +1396,8 @@ function wire(){
   const msDup = $('#msDup'); if(msDup) msDup.onclick = dup;
   const msDel = $('#msDel'); if(msDel) msDel.onclick = del;
   const ungroupBtn = $('#ungroupBtn'); if(ungroupBtn) ungroupBtn.onclick = ungroupSel;
+  const blendSel = $('#panel [data-blend]');
+  if(blendSel) blendSel.onchange = () => { commit(); o.blend = blendSel.value; touch(); };
   $$('#panel [data-align]').forEach(b => b.onclick = () => alignSel(b.dataset.align));
   const distX = $('#distX'); if(distX) distX.onclick = () => distributeSel('x');
   const distY = $('#distY'); if(distY) distY.onclick = () => distributeSel('y');
