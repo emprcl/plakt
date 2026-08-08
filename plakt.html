@@ -298,7 +298,11 @@ body.edit #status{transform:none}
   <button class="tl" data-add="rect"><span>RECT</span><span class="k">R</span></button>
   <button class="tl" data-add="ellipse"><span>CIRC</span><span class="k">C</span></button>
   <button class="tl" data-add="half"><span>HALF</span><span class="k">H</span></button>
+  <button class="tl" data-add="triangle"><span>TRI</span><span class="k">P</span></button>
+  <button class="tl" data-add="line"><span>LINE</span><span class="k">L</span></button>
   <button class="tl" data-add="text"><span>TEXT</span><span class="k">T</span></button>
+  <button class="tl" id="t-image"><span>IMAGE</span><span class="k">I</span></button>
+  <input type="file" accept="image/*" id="imgInput" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);border:0">
   <button class="tl touch" id="t-snap"><span>SNAP</span><span class="k">ON</span></button>
   <button class="tl touch" id="t-undo"><span>UNDO</span></button>
   <button class="tl touch" id="t-view"><span>VIEW</span></button>
@@ -534,6 +538,13 @@ const fillPct  = f => { const p = String(f).split('@')[1]; return p ? +p : 100; 
 /* every palette slot a fill points at — one for a solid, two for a gradient —
    so swatch rename/delete/copy can keep every reference in sync */
 const fillRefs = f => isGrad(f) ? [parseGrad(f).a, parseGrad(f).b] : [fillSlot(f)];
+/* rect/ellipse/half/triangle can carry an optional border — a plain palette
+   slot (no gradient, no tint), stored on o.stroke; o.sw is its width. */
+const hasStroke = o => o.stroke != null && o.stroke !== '';
+/* every palette slot an OBJECT points at — its fill plus its optional
+   border — so swatch rename/delete/copy stay correct regardless of which
+   field is pointing at a given slot */
+const objRefs = o => hasStroke(o) ? [...fillRefs(o.fill), fillSlot(o.stroke)] : fillRefs(o.fill);
 /* CSS-side preview for panel chips (a real <linearGradient> is only needed
    for the SVG canvas itself, via fillPaint/gradDefsSVG below) */
 const fillCSS = f => isGrad(f)
@@ -612,12 +623,20 @@ function groupTransform(o){
 function shapeSVG(o){
   if(o.type === 'group')
     return `<g class="o" data-id="${o.id}" transform="${groupTransform(o)}">${o.children.map(shapeSVG).join('')}</g>`;
-  const b = box(o), a = `class="o" data-id="${o.id}" fill="${fillPaint(o.fill)}"`, t = rotAttr(o);
+  const b = box(o), t = rotAttr(o);
+  if(o.type === 'line')                // a stroke, not a fill — no palette-fill attribute at all
+    return `<line class="o" data-id="${o.id}"${t} x1="${b.x}" y1="${b.y}" x2="${b.x+b.w}" y2="${b.y+b.h}" stroke="${fillPaint(o.fill)}" stroke-width="${o.sw||2}" stroke-linecap="round" pointer-events="stroke"/>`;
+  if(o.type === 'image')
+    return `<image class="o" data-id="${o.id}"${t} href="${esc(o.src)}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" preserveAspectRatio="none"/>`;
+  const border = hasStroke(o) ? ` stroke="${fillHex(o.stroke)}" stroke-width="${o.sw||2}"` : '';
+  const a = `class="o" data-id="${o.id}" fill="${fillPaint(o.fill)}"${border}`;
   switch(o.type){
     case 'ellipse':
       return `<ellipse ${a}${t} cx="${b.x+b.w/2}" cy="${b.y+b.h/2}" rx="${b.w/2}" ry="${b.h/2}"/>`;
     case 'half':
       return `<path ${a}${t} d="M ${b.x} ${b.y+b.h} A ${b.w/2} ${b.h} 0 0 1 ${b.x+b.w} ${b.y+b.h} Z"/>`;
+    case 'triangle':
+      return `<path ${a}${t} d="M ${b.x} ${b.y+b.h} L ${b.x+b.w} ${b.y+b.h} L ${b.x+b.w/2} ${b.y} Z"/>`;
     case 'text': {
       const {anchor, x} = textAnchor(o), lh = LH(o);
       const sp = wrapLines(o).map((l,i) =>
@@ -735,6 +754,11 @@ function patch(o){
     el.setAttribute('rx', b.w/2);     el.setAttribute('ry', b.h/2);
   } else if(o.type === 'half'){
     el.setAttribute('d', `M ${b.x} ${b.y+b.h} A ${b.w/2} ${b.h} 0 0 1 ${b.x+b.w} ${b.y+b.h} Z`);
+  } else if(o.type === 'triangle'){
+    el.setAttribute('d', `M ${b.x} ${b.y+b.h} L ${b.x+b.w} ${b.y+b.h} L ${b.x+b.w/2} ${b.y} Z`);
+  } else if(o.type === 'line'){
+    el.setAttribute('x1', b.x); el.setAttribute('y1', b.y);
+    el.setAttribute('x2', b.x+b.w); el.setAttribute('y2', b.y+b.h);
   } else if(o.type === 'text'){
     const {anchor, x} = textAnchor(o), lh = LH(o);
     el.setAttribute('x', x); el.setAttribute('y', o.y);
@@ -868,8 +892,33 @@ function groupPanel(o){
     <button class="alb" id="ungroupBtn" style="width:auto;padding:5px 10px">⇧⌘G UNGROUP</button>
   </div>`;
 }
+/* an image has no palette fill either — just its box, rotation, and a
+   file picker to swap the embedded data URI for another */
+function imagePanel(o){
+  return `
+  <div class="sec">
+    ${secHead('image', 'pixels from the top-left · <b>⌥</b> or <b>ctrl</b> to bypass snapping', `<em>#${o.id}</em>`)}
+    ${num('X','x',Math.round(o.x))}
+    ${num('Y','y',Math.round(o.y))}
+  </div>
+  <div class="sec">${secHead('Transform',
+    'pixels · ROT in degrees · drag a corner on the artboard, or the dot above it to rotate')}
+    ${num('W','w',Math.round(o.w))}
+    ${num('H','h',Math.round(o.h))}
+    ${num('ROT','rot',o.rot||0)}
+  </div>
+  <div class="sec">
+    ${secHead('Image', 'embedded as a data URI so the file stays self-contained — a large photo will bloat it')}
+    <label class="alb" style="width:auto;padding:5px 10px;display:inline-block;cursor:pointer">REPLACE
+      <input type="file" accept="image/*" id="imgReplace" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);border:0">
+    </label>
+  </div>`;
+}
 function objPanel(o){
   if(o.type === 'group') return groupPanel(o);
+  if(o.type === 'image') return imagePanel(o);
+  const isLine = o.type === 'line';
+  const hasBorder = ['rect','ellipse','half','triangle'].includes(o.type);
   const grad = isGrad(o.fill), g = grad ? parseGrad(o.fill) : null;
   const swRows = (activeId, attr) => doc.palette.map(s => `
     <button class="sw ${activeId===s.id?'on':''}" data-${attr}="${s.id}">
@@ -927,12 +976,15 @@ function objPanel(o){
   </div>
   ${geom}
   <div class="sec">
-    ${secHead('Fill', 'tints mix toward the <b>background</b> (the first swatch) and stay bound to the slot',
+    ${secHead(isLine ? 'Stroke' : 'Fill',
+      isLine ? 'the colour and weight of the line — tints mix toward the <b>background</b>'
+             : 'tints mix toward the <b>background</b> (the first swatch) and stay bound to the slot',
       grad ? '<em>gradient</em>' : `<em>${o.fill}</em><button id="forkSw">+ NEW</button>`)}
     <div class="r" style="margin-bottom:8px">
       <button class="alb ${grad?'':'on'}" id="fillSolid" style="width:auto;padding:5px 10px">SOLID</button>
       <button class="alb ${grad?'on':''}" id="fillGrad" style="width:auto;padding:5px 10px">GRADIENT</button>
     </div>
+    ${isLine ? num('WEIGHT','sw',o.sw||2) : ''}
     ${grad ? `
       <div class="r"><span class="lb">FROM</span></div>
       ${swRows(g.a, 'grada')}
@@ -947,11 +999,23 @@ function objPanel(o){
         <label class="ch" style="background:${slotHex(fillSlot(o.fill))};cursor:pointer;width:15px;height:15px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)">
           <input type="color" value="${slotHex(fillSlot(o.fill))}" data-edit="${fillSlot(o.fill)}">
         </label>
-        <span class="tip" style="margin:0">edit <b>${fillSlot(o.fill)}</b> — used by ${allObjects().filter(x => fillRefs(x.fill).includes(fillSlot(o.fill))).length}</span>
+        <span class="tip" style="margin:0">edit <b>${fillSlot(o.fill)}</b> — used by ${allObjects().filter(x => objRefs(x).includes(fillSlot(o.fill))).length}</span>
       </div>
       <div class="tints">${tints}</div>
     `}
-  </div>`;
+  </div>
+  ${hasBorder ? `
+  <div class="sec">
+    ${secHead('Border', 'an optional outline drawn on top of the fill', hasStroke(o) ? `<em>${o.stroke}</em>` : '')}
+    <div class="r" style="margin-bottom:8px">
+      <button class="alb ${hasStroke(o)?'':'on'}" id="borderOff" style="width:auto;padding:5px 10px">NONE</button>
+      <button class="alb ${hasStroke(o)?'on':''}" id="borderOn" style="width:auto;padding:5px 10px">ON</button>
+    </div>
+    ${hasStroke(o) ? `
+      ${swRows(fillSlot(o.stroke), 'strokeslot')}
+      ${num('WEIGHT','sw',o.sw||2)}
+    ` : ''}
+  </div>` : ''}`;
 }
 
 let tab = 'artboard';
@@ -960,7 +1024,7 @@ function docPanel(){
   if(tab === 'layers'){
     const row = (o, parent) => `
       <button class="ly ${sel.includes(o.id)?'on':''}" data-pick="${o.id}"${parent!=null ? ` data-parent="${parent}" style="padding-left:26px"` : ''}>
-        <span class="ch" style="${o.type==='group' ? 'background:transparent;box-shadow:inset 0 0 0 1px var(--hair)' : `background:${fillCSS(o.fill)}`}"></span>
+        <span class="ch" style="${o.type==='group'||o.type==='image' ? 'background:transparent;box-shadow:inset 0 0 0 1px var(--hair)' : `background:${fillCSS(o.fill)}`}"></span>
         <span class="t">${o.type === 'group' ? 'group' : o.type === 'text' ? esc(o.str.split('\n')[0].slice(0,18)) : o.type}</span>
         <span class="x">#${o.id}</span>
       </button>`;
@@ -972,7 +1036,7 @@ function docPanel(){
     </div>`;
   }
 
-  const used = id => allObjects().filter(o => fillRefs(o.fill).includes(id)).length;
+  const used = id => allObjects().filter(o => objRefs(o).includes(id)).length;
   const sw = doc.palette.map(s => `
     <div class="sw">
       <label class="ch" style="background:${s.hex};cursor:pointer">
@@ -1031,6 +1095,26 @@ function multiPanel(){
       <button class="alb" id="msDup" style="width:auto;padding:5px 10px">⌘D DUPLICATE</button>
       <button class="alb" id="msDel" style="width:auto;padding:5px 10px">⌫ DELETE</button>
     </div>
+  </div>
+  <div class="sec">
+    ${secHead('Align', "against the selection's own bounding box")}
+    <div class="r">
+      <button class="alb" data-align="left" style="width:auto;padding:5px 8px">LEFT</button>
+      <button class="alb" data-align="centerX" style="width:auto;padding:5px 8px">CENTER</button>
+      <button class="alb" data-align="right" style="width:auto;padding:5px 8px">RIGHT</button>
+    </div>
+    <div class="r" style="margin-top:6px">
+      <button class="alb" data-align="top" style="width:auto;padding:5px 8px">TOP</button>
+      <button class="alb" data-align="centerY" style="width:auto;padding:5px 8px">MIDDLE</button>
+      <button class="alb" data-align="bottom" style="width:auto;padding:5px 8px">BOTTOM</button>
+    </div>
+  </div>
+  <div class="sec">
+    ${secHead('Distribute', 'equalises the gaps between 3 or more objects')}
+    <div class="r">
+      <button class="alb" id="distX" style="width:auto;padding:5px 10px">HORIZONTAL</button>
+      <button class="alb" id="distY" style="width:auto;padding:5px 10px">VERTICAL</button>
+    </div>
   </div>`;
 }
 function panel(){
@@ -1081,6 +1165,7 @@ function fieldSet(k, v){
   }
   if(k === 'x' || k === 'y')      o[k] = Math.round(v*100)/100;
   else if(k === 'w' || k === 'h') o[k] = Math.max(1, Math.round(v));
+  else if(k === 'sw')             o.sw  = Math.max(1, Math.round(v));
   else if(k === 'size')           o.size = Math.max(1, Math.round(v));
   else if(k === 'lh')             o.lh   = Math.max(0, Math.round(v));   /* 0 = auto */
   else o[k] = Math.round(v);                                            /* rot, wt, tr */
@@ -1160,6 +1245,25 @@ function wire(){
   $$('#panel .sw[data-gradb]').forEach(b => b.onclick = () => {
     commit(); const g = parseGrad(o.fill); o.fill = mkGrad(g.ang, g.a, b.dataset.gradb, g.off, g.len); touch();
   });
+  const borderOn = $('#borderOn');
+  if(borderOn) borderOn.onclick = () => {
+    if(hasStroke(o)) return;                            // already on — nothing to do
+    commit();
+    o.stroke = o.strokeCache || (doc.palette.find(p => p.id !== fillSlot(o.fill)) || {}).id || fillSlot(o.fill);
+    if(!o.sw) o.sw = 2;
+    touch();
+  };
+  const borderOff = $('#borderOff');
+  if(borderOff) borderOff.onclick = () => {
+    if(!hasStroke(o)) return;
+    commit();
+    o.strokeCache = o.stroke;                           // remember it in case the border comes back
+    delete o.stroke;
+    touch();
+  };
+  $$('#panel .sw[data-strokeslot]').forEach(b => b.onclick = () => {
+    commit(); o.stroke = b.dataset.strokeslot; touch();
+  });
   $$('#panel .f[data-font]').forEach(b => b.onclick = () => { commit(); o.font = b.dataset.font; touch(); });
   $$('#panel .alb[data-al]').forEach(b => b.onclick = () => { commit(); o.al = b.dataset.al; touch(); });
   $$('#panel input[data-edit]').forEach(i => {
@@ -1180,6 +1284,9 @@ function wire(){
   const msDup = $('#msDup'); if(msDup) msDup.onclick = dup;
   const msDel = $('#msDel'); if(msDel) msDel.onclick = del;
   const ungroupBtn = $('#ungroupBtn'); if(ungroupBtn) ungroupBtn.onclick = ungroupSel;
+  $$('#panel [data-align]').forEach(b => b.onclick = () => alignSel(b.dataset.align));
+  const distX = $('#distX'); if(distX) distX.onclick = () => distributeSel('x');
+  const distY = $('#distY'); if(distY) distY.onclick = () => distributeSel('y');
 
   const ts = $('#tstr');
   if(ts){
@@ -1212,6 +1319,8 @@ function wire(){
     doc.palette.push({ id: 'C' + n, hex: fillHex(o.fill) });
     o.fill = 'C' + n; touch();
   };
+  const ir = $('#imgReplace');
+  if(ir) ir.onchange = () => { replaceImage(o, ir.files[0]); ir.value = ''; };
 }
 function syncSnapUI(){ $('#t-snap').querySelector('.k').textContent = snap ? 'ON' : 'OFF'; }
 
@@ -1472,12 +1581,40 @@ function add(type){
   const base = { id: nextId(), x:m, y:m, w, h, rot:0, fill:defaultFill() };
   const fs = Math.round(doc.h/12);
   const o =
-    type === 'text'    ? {...base, type:'text', y:m+fs, str:'TYPE HERE', font:'Poppins', size:fs,
-                          tr:0, wt:500, lh:0, al:'l'}
-  : type === 'half'    ? {...base, type:'half', h: Math.round(doc.h/6)}
-  : type === 'ellipse' ? {...base, type:'ellipse'}
+    type === 'text'     ? {...base, type:'text', y:m+fs, str:'TYPE HERE', font:'Poppins', size:fs,
+                           tr:0, wt:500, lh:0, al:'l'}
+  : type === 'half'     ? {...base, type:'half', h: Math.round(doc.h/6)}
+  : type === 'ellipse'  ? {...base, type:'ellipse'}
+  : type === 'triangle' ? {...base, type:'triangle'}
+  : type === 'line'     ? {...base, type:'line', h: Math.round(doc.h/24), sw: Math.max(1, Math.round(doc.w/240))}
   : {...base, type:'rect'};
   activeList().push(o); sel = [o.id]; tab = 'selection'; touch();
+}
+/* images arrive async off a file picker, so they can't share add()'s
+   synchronous flow — read as a data URI, so the saved file/exported SVG
+   stay self-contained with no dependency on where the source file lives */
+function addImage(file){
+  if(!file || !file.type.startsWith('image/')) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const src = reader.result, img = new Image();
+    img.onload = () => {
+      commit();
+      const m = doc.margin||0;
+      const w = Math.min(Math.round(doc.w/2), img.naturalWidth || doc.w/2);
+      const h = Math.round(w * ((img.naturalHeight || 1) / (img.naturalWidth || 1)));
+      const o = { id: nextId(), type:'image', x:m, y:m, w, h: h || w, rot:0, src };
+      activeList().push(o); sel = [o.id]; tab = 'selection'; touch();
+    };
+    img.src = src;
+  };
+  reader.readAsDataURL(file);
+}
+function replaceImage(o, file){
+  if(!o || !file || !file.type.startsWith('image/')) return;
+  const reader = new FileReader();
+  reader.onload = () => { commit(); o.src = reader.result; touch(); };
+  reader.readAsDataURL(file);
 }
 /* fresh id(s) + an x/y offset — for a group, deep-clones its children with
    their own fresh ids too (they must never alias the original's array, or
@@ -1554,6 +1691,7 @@ function bakeChild(c, g){
   const pv = localToDoc(pivot(c), g, cb, s);
   const rot = (((c.rot||0) + g.rot) % 360 + 360) % 360;
   const baked = { ...c, rot, w: c.w*s, h: c.h*s };
+  if(c.sw) baked.sw = c.sw*s;   /* a line's own stroke, or a shape's optional border */
   if(c.type === 'text'){
     baked.x = pv.x; baked.y = pv.y; baked.size = c.size*s;
     if(c.lh > 0) baked.lh = c.lh*s;
@@ -1580,7 +1718,7 @@ function ungroupSel(){
    fallback for when the system clipboard is unreadable (offline file://). */
 let clip = null;
 function clipData(objs){
-  const ids = new Set(objs.flatMap(o => fillRefs(o.fill)));
+  const ids = new Set(objs.flatMap(objRefs));
   return { plakt:'clip', v:1,
     objects: objs.map(o => o.type === 'group' ? {...o, children: o.children.map(c => ({...c}))} : {...o}),
     palette: doc.palette.filter(p => ids.has(p.id)).map(p => ({...p})) };
@@ -1647,6 +1785,48 @@ function order(d){
   const j = i + d; if(j < 0 || j >= list.length) return;
   commit(); [list[i], list[j]] = [list[j], list[i]]; touch();
 }
+/* align/distribute operate purely on the selected objects' own coordinates
+   relative to each other — unlike centre()/snapSel()/etc below (which
+   measure against the *document*), they need no entered-group guard:
+   whatever frame the selection's ids live in, they all share it (see
+   selectedObjs()'s comment on the selection-homogeneity invariant). */
+function alignSel(mode){
+  const objs = selectedObjs(); if(objs.length < 2) return flash('select at least 2 objects');
+  commit();
+  const boxes = objs.map(o => ({ o, b: localBox(o) }));
+  const x0 = Math.min(...boxes.map(({b}) => b.x)), x1 = Math.max(...boxes.map(({b}) => b.x+b.w));
+  const y0 = Math.min(...boxes.map(({b}) => b.y)), y1 = Math.max(...boxes.map(({b}) => b.y+b.h));
+  boxes.forEach(({o,b}) => {
+    if(mode === 'left')         setPos(o, o.x + (x0 - b.x), o.y);
+    else if(mode === 'right')   setPos(o, o.x + (x1 - (b.x+b.w)), o.y);
+    else if(mode === 'centerX') setPos(o, o.x + ((x0+x1)/2 - (b.x+b.w/2)), o.y);
+    else if(mode === 'top')     setPos(o, o.x, o.y + (y0 - b.y));
+    else if(mode === 'bottom')  setPos(o, o.x, o.y + (y1 - (b.y+b.h)));
+    else if(mode === 'centerY') setPos(o, o.x, o.y + ((y0+y1)/2 - (b.y+b.h/2)));
+  });
+  touch();
+}
+/* equalise the gaps between bounding boxes along one axis, sorted by
+   position — the first and last objects anchor the span, only the ones
+   between them move (the standard "distribute spacing" behaviour) */
+function distributeSel(axis){
+  const objs = selectedObjs(); if(objs.length < 3) return flash('select at least 3 objects');
+  commit();
+  const k = axis === 'x' ? 'x' : 'y', d = axis === 'x' ? 'w' : 'h';
+  const boxes = objs.map(o => ({ o, b: localBox(o) })).sort((p,q) => p.b[k] - q.b[k]);
+  const first = boxes[0].b, last = boxes[boxes.length-1].b;
+  const span = (last[k]+last[d]) - first[k];
+  const used = boxes.reduce((s,{b}) => s + b[d], 0);
+  const gap = (span - used) / (boxes.length - 1);
+  let cursor = first[k] + first[d];
+  for(let i = 1; i < boxes.length-1; i++){
+    const {o,b} = boxes[i], target = cursor + gap;
+    if(axis === 'x') setPos(o, o.x + (target - b.x), o.y);
+    else              setPos(o, o.x, o.y + (target - b.y));
+    cursor = target + b[d];
+  }
+  touch();
+}
 /* these four position/align a single object against the *document's*
    edges/grid/guides — meaningless for a child of an entered group, whose
    x/y live in the group's own local frame, not the document's */
@@ -1704,13 +1884,15 @@ function renameSwatch(oldId, raw){
       const g = parseGrad(o.grad);
       if(g.a === oldId || g.b === oldId) o.grad = mkGrad(g.ang, g.a === oldId ? id : g.a, g.b === oldId ? id : g.b, g.off, g.len);
     }
+    if(o.stroke === oldId) o.stroke = id;
+    if(o.strokeCache === oldId) o.strokeCache = id;     // ...including a border parked while off
   });
   touch();
 }
 function delSwatch(id){
   if(doc.palette[0] && doc.palette[0].id === id) return flash('the first swatch is the background — it can’t be removed');
   if(doc.palette.length <= 2) return flash('keep at least two swatches');
-  if(allObjects().some(o => fillRefs(o.fill).includes(id))) return flash(id + ' is in use — recolour those objects first');
+  if(allObjects().some(o => objRefs(o).includes(id))) return flash(id + ' is in use — recolour those objects first');
   commit();
   doc.palette = doc.palette.filter(p => p.id !== id);
   touch();
@@ -1844,7 +2026,10 @@ const CMDS = [
   {n:'Add rectangle',    k:'R',  f:()=>add('rect')},
   {n:'Add circle',       k:'C',  f:()=>add('ellipse')},
   {n:'Add half circle',  k:'H',  f:()=>add('half')},
+  {n:'Add triangle',     k:'P',  f:()=>add('triangle')},
+  {n:'Add line',         k:'L',  f:()=>add('line')},
   {n:'Add text',         k:'T',  f:()=>add('text')},
+  {n:'Add image',        k:'I',  f:()=>$('#imgInput').click()},
   {n:'Duplicate',        k:'⌘D', f:dup},
   {n:'Group',            k:'⌘G', f:groupSel},
   {n:'Ungroup',          k:'⇧⌘G',f:ungroupSel},
@@ -1857,6 +2042,14 @@ const CMDS = [
   {n:'Span full width',  k:'',   f:fitWidth},
   {n:'Centre horizontally', k:'', f:()=>centre('x')},
   {n:'Centre vertically',   k:'', f:()=>centre('y')},
+  {n:'Align left',          k:'', f:()=>alignSel('left')},
+  {n:'Align right',         k:'', f:()=>alignSel('right')},
+  {n:'Align centre (horizontal)', k:'', f:()=>alignSel('centerX')},
+  {n:'Align top',           k:'', f:()=>alignSel('top')},
+  {n:'Align bottom',        k:'', f:()=>alignSel('bottom')},
+  {n:'Align middle (vertical)',   k:'', f:()=>alignSel('centerY')},
+  {n:'Distribute horizontally', k:'', f:()=>distributeSel('x')},
+  {n:'Distribute vertically',   k:'', f:()=>distributeSel('y')},
   {n:'Snap selection to grid', k:'', f:snapSel},
   {n:'Bring forward',    k:']',  f:()=>order(1)},
   {n:'Send backward',    k:'[',  f:()=>order(-1)},
@@ -1942,8 +2135,9 @@ addEventListener('keydown', e => {
   if(!edit) return;
 
   if(e.shiftKey && k === 'r'){ rot90(); return; }
-  const keys = {r:'rect', c:'ellipse', h:'half', t:'text'};
+  const keys = {r:'rect', c:'ellipse', h:'half', t:'text', p:'triangle', l:'line'};
   if(keys[k]){ add(keys[k]); return; }
+  if(k === 'i'){ $('#imgInput').click(); return; }
   if(k === 'g'){ document.body.classList.toggle('grid'); return; }
   if(e.key === ']'){ order(1); return; }
   if(e.key === '['){ order(-1); return; }
@@ -1962,6 +2156,8 @@ addEventListener('keydown', e => {
 
 /* ── wiring ──────────────────────────────────────────────────────── */
 $$('.tl[data-add]').forEach(b => b.onclick = () => add(b.dataset.add));
+$('#t-image').onclick = () => $('#imgInput').click();
+$('#imgInput').onchange = () => { addImage($('#imgInput').files[0]); $('#imgInput').value = ''; };
 $('#t-view').onclick = () => mode(false);
 $('#t-undo').onclick = undo;
 $('#t-snap').onclick = () => { snap = !snap; syncSnapUI(); panel(); };
