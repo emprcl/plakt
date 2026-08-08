@@ -2288,7 +2288,6 @@ const CMDS = [
   {n:'Redo',             k:'⇧⌘Z',f:redo},
   {n:'Add palette swatch', k:'', f:addSwatch},
   {n:'Rename plakt',     k:'',   f:()=>{ sel=[]; tab='artboard'; panel(); const i=$('#docname'); if(i){i.focus();i.select();} }},
-  {n:'Load sample plakt', k:'', f:sample},
   {n:'Clear artboard',   k:'',   f:()=>{commit();doc.objects=[];sel=[];entered=null;touch()}},
   {n:'Export PNG @1x',   k:'',   f:()=>exportPNG(1)},
   {n:'Export PNG @2x',   k:'',   f:()=>exportPNG(2)},
@@ -2300,21 +2299,6 @@ const CMDS = [
   {n:'Enter edit mode',  k:'E',  f:()=>mode(true)},
   {n:'Leave edit mode',  k:'ESC',f:()=>mode(false)}
 ];
-
-function sample(){
-  commit();
-  Object.assign(doc, {w:1200, h:1600, cols:12, rows:16, gap:10, margin:40});
-  doc.objects = [
-    {id:1,type:'ellipse',x:323,y:327,w:555,h:564,rot:0,fill:'RED'},
-    {id:2,type:'half',x:605,y:805,w:461,h:181,rot:0,fill:'BLU'},
-    {id:3,type:'rect',x:134,y:1001,w:932,h:86,rot:0,fill:'INK'},
-    {id:4,type:'rect',x:134,y:136,w:84,h:86,rot:45,fill:'YEL'},
-    {id:5,type:'text',x:134,y:1283,w:932,al:'l',str:'BAUHAUS',font:'Poppins',size:175,tr:-5,wt:400,lh:0,fill:'INK'},
-    {id:6,type:'text',x:134,y:1389,w:932,al:'l',str:'AUSSTELLUNG',font:'Poppins',size:60,tr:10,wt:500,lh:0,fill:'INK'},
-    {id:7,type:'text',x:134,y:1464,w:932,al:'l',str:'WEIMAR · JULI—SEPT',font:'Poppins',size:60,tr:10,wt:500,lh:0,fill:'RED'}
-  ];
-  sel = []; entered = null; touch();
-}
 
 /* ── command palette ─────────────────────────────────────────────── */
 let ci = 0, hits = CMDS;
