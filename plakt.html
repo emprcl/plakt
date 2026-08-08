@@ -914,8 +914,41 @@ const touch = () => { dirty = true; full(); };
 /* ════════════════════════════════════════════════════════════════════
    PANEL
    ═══════════════════════════════════════════════════════════════════ */
-function num(lb, k, v){
-  return `<div class="r"><span class="lb">${lb}</span><input class="n" data-k="${k}" value="${v}"></div>`;
+function num(lb, k, v, w, u=''){
+  /* .lb defaults to a fixed 34px — plenty for ROT/RADIUS/etc, but a longer
+     label like OPACITY needs to ask for more or it visually crowds the
+     input next to it */
+  const style = w ? ` style="width:${w}px"` : '';
+  return `<div class="r"><span class="lb"${style}>${lb}</span><input class="n" data-k="${k}" value="${v}">${u?`<span class="u">${u}</span>`:''}</div>`;
+}
+/* two numeric fields sharing one row — the same layout already used for
+   SIZE/LEAD, WIDTH/TRK, WGHT/ROT and COLS/ROWS, GAP/MARGIN, SNAP/SHOW: a
+   plain-width first label, a fixed-width right-aligned second label so
+   the input columns line up down the panel. w2 is that second label's
+   width in px — pick it to fit the label (26 for short ones like ROT,
+   more for longer ones like OPACITY). */
+function num2(lb1, k1, v1, lb2, k2, v2, w2, u1='', u2=''){
+  return `<div class="r"><span class="lb">${lb1}</span><input class="n" data-k="${k1}" value="${v1}">${u1?`<span class="u">${u1}</span>`:''}
+    <span class="lb" style="width:${w2}px;text-align:right">${lb2}</span><input class="n" data-k="${k2}" value="${v2}">${u2?`<span class="u">${u2}</span>`:''}</div>`;
+}
+/* the ON/OFF toggle look already used for SNAP/SHOW — a label plus a
+   button styled like a number input, showing the current state as text
+   rather than a checked/unchecked icon */
+function toggleRow(lb, dataAttr, on, w){
+  const style = w ? ` style="width:${w}px"` : '';
+  return `<div class="r"><span class="lb"${style}>${lb}</span><button class="n" style="width:auto;padding:3px 10px;cursor:pointer" ${dataAttr}>${on?'ON':'OFF'}</button></div>`;
+}
+/* two independent stacked columns side by side, each its own list of rows
+   — used for the Transform section (W/H/LOCK vs. everything else) rather
+   than num2()'s one-row-per-pair layout, so a column can hold a different
+   number of fields than its neighbour. Every row passed in should share
+   its column's label width (see the 34/50 constants where these are
+   built) so both the labels and the input boxes line up down the panel. */
+function col2(colA, colB){
+  return `<div style="display:flex;gap:14px">
+    <div style="flex:1">${colA.join('')}</div>
+    <div style="flex:1">${colB.join('')}</div>
+  </div>`;
 }
 /* section heading: label (with an optional "?" help bubble that replaces
    the old always-on tip lines) on the left, optional control on the right */
@@ -930,15 +963,14 @@ function groupPanel(o){
   return `
   <div class="sec">
     ${secHead('group', 'pixels from the top-left · <b>⌥</b> or <b>ctrl</b> to bypass snapping', `<em>#${o.id}</em>`)}
-    ${num('X','x',Math.round(o.x))}
-    ${num('Y','y',Math.round(o.y))}
+    ${num2('X','x',Math.round(o.x), 'Y','y',Math.round(o.y), 50)}
   </div>
   <div class="sec">${secHead('Transform',
     'pixels · ROT in degrees · resizing keeps everything inside proportional')}
-    ${num('W','w',Math.round(o.w))}
-    ${num('H','h',Math.round(o.h))}
-    ${num('ROT','rot',o.rot||0)}
-    ${num('OPACITY','op',o.op??100)}
+    ${col2(
+      [num('W','w',Math.round(o.w),34), num('H','h',Math.round(o.h),34)],
+      [num('ROT','rot',o.rot||0,50), num('OPACITY','op',o.op??100,50,'%')]
+    )}
   </div>
   <div class="sec">
     ${secHead('Blend', "blends the group's rendered result as one unit against what's behind it — not each shape individually")}
@@ -957,15 +989,14 @@ function imagePanel(o){
   return `
   <div class="sec">
     ${secHead('image', 'pixels from the top-left · <b>⌥</b> or <b>ctrl</b> to bypass snapping', `<em>#${o.id}</em>`)}
-    ${num('X','x',Math.round(o.x))}
-    ${num('Y','y',Math.round(o.y))}
+    ${num2('X','x',Math.round(o.x), 'Y','y',Math.round(o.y), 50)}
   </div>
   <div class="sec">${secHead('Transform',
     'pixels · ROT in degrees · drag a corner on the artboard, or the dot above it to rotate')}
-    ${num('W','w',Math.round(o.w))}
-    ${num('H','h',Math.round(o.h))}
-    ${num('ROT','rot',o.rot||0)}
-    ${num('OPACITY','op',o.op??100)}
+    ${col2(
+      [num('W','w',Math.round(o.w),34), num('H','h',Math.round(o.h),34), toggleRow('LOCK','data-lock',!!o.lockAspect,34)],
+      [num('ROT','rot',o.rot||0,50), num('OPACITY','op',o.op??100,50,'%')]
+    )}
   </div>
   <div class="sec">
     ${secHead('Image', 'embedded as a data URI so the file stays self-contained — a large photo will bloat it')}
@@ -1009,7 +1040,7 @@ function objPanel(o){
            <span class="lb" style="width:26px;text-align:right">TRK</span><input class="n" data-k="tr" value="${o.tr||0}"></div>
          <div class="r"><span class="lb">WGHT</span><input class="n" data-k="wt" value="${o.wt||400}">
            <span class="lb" style="width:26px;text-align:right">ROT</span><input class="n" data-k="rot" value="${o.rot||0}"></div>
-         <div class="r"><span class="lb">OPACITY</span><input class="n" data-k="op" value="${o.op??100}"><span class="u">%</span></div>
+         <div class="r"><span class="lb" style="width:50px">OPACITY</span><input class="n" data-k="op" value="${o.op??100}"><span class="u">%</span></div>
        </div>
        <div class="sec">${secHead('Typeface',
          "Google faces are fetched over the network — the file stops being self-contained and they won't rasterise into a PNG offline")}<div class="fs">
@@ -1030,18 +1061,23 @@ function objPanel(o){
     : `<div class="sec">${secHead('Transform',
          isLine ? 'pixels · drag either end on the artboard to reposition or re-angle it'
                 : 'pixels · ROT in degrees · drag a corner on the artboard, or the dot above it to rotate')}
-         ${num('W','w',Math.round(o.w))}
-         ${num('H','h',Math.round(o.h))}
-         ${isLine ? '' : num('ROT','rot',o.rot||0)}
-         ${o.type === 'rect' ? num('RADIUS','rx',o.rx||0) : ''}
-         ${num('OPACITY','op',o.op??100)}
+         ${isLine
+           ? col2(
+               [num('W','w',Math.round(o.w),34), num('H','h',Math.round(o.h),34)],
+               [num('OPACITY','op',o.op??100,50,'%')]
+             )
+           : col2(
+               [num('W','w',Math.round(o.w),34), num('H','h',Math.round(o.h),34), toggleRow('LOCK','data-lock',!!o.lockAspect,34)],
+               [num('ROT','rot',o.rot||0,50),
+                ...(o.type === 'rect' ? [num('RADIUS','rx',o.rx||0,50)] : []),
+                num('OPACITY','op',o.op??100,50,'%')]
+             )}
        </div>`;
 
   return `
   <div class="sec">
     ${secHead(o.type, 'pixels from the top-left · <b>⌥</b> or <b>ctrl</b> to bypass snapping', `<em>#${o.id}</em>`)}
-    ${num('X','x',Math.round(o.x))}
-    ${num('Y','y',Math.round(o.y))}
+    ${num2('X','x',Math.round(o.x), 'Y','y',Math.round(o.y), 50)}
   </div>
   ${geom}
   <div class="sec">
@@ -1122,19 +1158,16 @@ function docPanel(){
   <div class="sec">
     ${secHead('Artboard', 'pixels — this is exactly the @1x PNG export size')}
     <div class="r"><span class="lb">NAME</span><input class="tx" id="docname" value="${esc(doc.name)}" spellcheck="false"></div>
-    <div class="r"><span class="lb">W</span><input class="n" data-k="docw" value="${doc.w}"><span class="u">px</span>
-                   <span class="lb" style="width:16px;text-align:right">H</span><input class="n" data-k="doch" value="${doc.h}"><span class="u">px</span></div>
+    ${num2('W','docw',doc.w, 'H','doch',doc.h, 50, 'px', 'px')}
   </div>
   <div class="sec">
     ${secHead('Grid',
       "the grid only guides snapping — it lines things up but never moves what you've placed · set an axis to 1 for no lines there · drag from the strips above and left of the artboard to add guides",
       `<em>${cw.toFixed(1)} × ${rh.toFixed(1)}</em>`)}
-    <div class="r"><span class="lb">COLS</span><input class="n" data-k="cols" value="${doc.cols}">
-                   <span class="lb" style="width:34px;text-align:right">ROWS</span><input class="n" data-k="rows" value="${doc.rows}"></div>
-    <div class="r"><span class="lb">GAP</span><input class="n" data-k="gap" value="${doc.gap||0}"><span class="u">px</span>
-                   <span class="lb" style="width:44px;text-align:right">MARGIN</span><input class="n" data-k="margin" value="${doc.margin||0}"></div>
-    <div class="r"><span class="lb">SNAP</span><button class="n" style="width:auto;padding:3px 10px;cursor:pointer" id="snapT">${snap?'ON':'OFF'}</button>
-                   <span class="lb" style="width:34px;text-align:right">SHOW</span><button class="n" style="width:auto;padding:3px 10px;cursor:pointer" id="gridT">${document.body.classList.contains('grid')?'ON':'OFF'}</button></div>
+    ${col2(
+      [num('COLS','cols',doc.cols,34), num('GAP','gap',doc.gap||0,34,'px'), toggleRow('SNAP','id="snapT"',snap,34)],
+      [num('ROWS','rows',doc.rows,50), num('MARGIN','margin',doc.margin||0,50), toggleRow('SHOW','id="gridT"',document.body.classList.contains('grid'),50)]
+    )}
   </div>
   <div class="sec">
     ${secHead('Palette', 'rename in place · a swatch in use can’t be removed · the first swatch is the background',
@@ -1235,7 +1268,14 @@ function fieldSet(k, v){
     dirty = true; return;
   }
   if(k === 'x' || k === 'y')      o[k] = Math.round(v*100)/100;
-  else if(k === 'w' || k === 'h') o[k] = Math.max(1, Math.round(v));
+  else if(k === 'w' || k === 'h'){
+    const nv = Math.max(1, Math.round(v));
+    if(o.lockAspect && o.w > 0 && o.h > 0){
+      const ratio = o.w / o.h;                  /* whatever the shape's current proportions are */
+      if(k === 'w'){ o.w = nv; o.h = Math.max(1, Math.round(nv / ratio)); }
+      else         { o.h = nv; o.w = Math.max(1, Math.round(nv * ratio)); }
+    } else o[k] = nv;
+  }
   else if(k === 'sw')             o.sw  = Math.max(1, Math.round(v));
   else if(k === 'op')             o.op  = Math.max(0, Math.min(100, Math.round(v)));
   else if(k === 'rx')             o.rx  = Math.max(0, Math.round(v));
@@ -1398,6 +1438,8 @@ function wire(){
   const ungroupBtn = $('#ungroupBtn'); if(ungroupBtn) ungroupBtn.onclick = ungroupSel;
   const blendSel = $('#panel [data-blend]');
   if(blendSel) blendSel.onchange = () => { commit(); o.blend = blendSel.value; touch(); };
+  const lockBtn = $('#panel [data-lock]');
+  if(lockBtn) lockBtn.onclick = () => { commit(); o.lockAspect = !o.lockAspect; touch(); };
   $$('#panel [data-align]').forEach(b => b.onclick = () => alignSel(b.dataset.align));
   const distX = $('#distX'); if(distX) distX.onclick = () => distributeSel('x');
   const distY = $('#distY'); if(distY) distY.onclick = () => distributeSel('y');
@@ -1667,6 +1709,14 @@ addEventListener('pointermove', e => {
       o.w = Math.max(1, Math.round(drag.b.w * s));
       o.h = Math.max(1, Math.round(drag.b.h * s));
       setPos(o, k.includes('w') ? ax - o.w : ax, k.includes('n') ? ay - o.h : ay);
+    } else if(e.shiftKey || o.lockAspect){
+      /* same "scale by whichever axis moved more" formula as the group's
+         always-proportional resize above — ⇧ asks for it on the fly,
+         o.lockAspect (the panel's LOCK toggle) asks for it every time */
+      const s = Math.max(Math.abs(q.x - ax) / drag.b.w, Math.abs(q.y - ay) / drag.b.h);
+      o.w = Math.max(1, Math.round(drag.b.w * s));
+      o.h = Math.max(1, Math.round(drag.b.h * s));
+      setPos(o, k.includes('w') ? ax - o.w : ax, k.includes('n') ? ay - o.h : ay);
     } else {
       o.w = Math.max(1, Math.round(Math.abs(q.x - ax)));
       o.h = Math.max(1, Math.round(Math.abs(q.y - ay)));
@@ -1711,7 +1761,7 @@ function add(type){
   commit();
   /* land at the top-left margin, a third of the artboard across */
   const m = doc.margin||0, w = Math.round(doc.w/3), h = Math.round(doc.h/3);
-  const base = { id: nextId(), x:m, y:m, w, h, rot:0, fill:defaultFill() };
+  const base = { id: nextId(), x:m, y:m, w, h, rot:0, fill:defaultFill(), lockAspect:true };
   const fs = Math.round(doc.h/12);
   const o =
     type === 'text'     ? {...base, type:'text', y:m+fs, str:'TYPE HERE', font:'Poppins', size:fs,
@@ -1736,7 +1786,7 @@ function addImage(file){
       const m = doc.margin||0;
       const w = Math.min(Math.round(doc.w/2), img.naturalWidth || doc.w/2);
       const h = Math.round(w * ((img.naturalHeight || 1) / (img.naturalWidth || 1)));
-      const o = { id: nextId(), type:'image', x:m, y:m, w, h: h || w, rot:0, src };
+      const o = { id: nextId(), type:'image', x:m, y:m, w, h: h || w, rot:0, src, lockAspect:true };
       activeList().push(o); sel = [o.id]; tab = 'selection'; touch();
     };
     img.src = src;
