@@ -786,8 +786,15 @@ function patch(o){
 }
 
 /* ── selection + transform handles ───────────────────────────────── */
+/* a line's endpoints can be dragged past each other, giving it a negative
+   w and/or h (box(o) — and the line's own rendering — keep those signed
+   values as-is, since x1/y1→x2/y2 needs the real direction) — but every
+   bbox/snap/align consumer here wants a normal positive-area rectangle,
+   so localBox() is the one place that normalises it for them. */
 function localBox(o){
-  return o.type === 'text' ? textBox(o) : box(o);
+  if(o.type === 'text') return textBox(o);
+  if(o.type === 'line') return { x: Math.min(o.x, o.x+o.w), y: Math.min(o.y, o.y+o.h), w: Math.abs(o.w), h: Math.abs(o.h) };
+  return box(o);
 }
 /* every object that exists, a group's children flattened in alongside it —
    groups nest one level deep, so this is the whole story */
@@ -807,7 +814,10 @@ const selectedObjs = () => sel.map(id => allObjects().find(o => o.id === id)).fi
 /* the axis-aligned box enclosing a set of resolved objects' own boxes —
    used to snap a multi-drag, or a group's own bounds, as one rigid unit */
 function bboxOf(objs){
-  const bs = objs.map(localBox).filter(b => b.w > 0 && b.h > 0);
+  /* a flat/vertical line legitimately has w or h at exactly 0 — only
+     drop truly degenerate (both zero) boxes, e.g. a font metric that
+     hasn't resolved yet */
+  const bs = objs.map(localBox).filter(b => b.w > 0 || b.h > 0);
   if(!bs.length) return {x:0,y:0,w:0,h:0};
   const x0 = Math.min(...bs.map(b=>b.x)), y0 = Math.min(...bs.map(b=>b.y));
   const x1 = Math.max(...bs.map(b=>b.x+b.w)), y1 = Math.max(...bs.map(b=>b.y+b.h));
@@ -851,6 +861,21 @@ function marks(){
   const o0 = cur();
   if(!o0) return;
   const o = displayObj(o0);
+  /* a line has no area, so it gets its own 2-endpoint handles instead of
+     the generic 4-corner box + rotate dot — dragging an end already
+     re-angles it, so there's nothing left for a separate rotate handle
+     to do (see the 'lineEnd' pointermove branch) */
+  if(o.type === 'line'){
+    const b = box(o), t = rotAttr(o), s = unit()*0.5;
+    const x1 = b.x, y1 = b.y, x2 = b.x+b.w, y2 = b.y+b.h;
+    h.innerHTML = `<g${t}>
+      <line class="sel-o" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>
+      <line class="sel-i" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>
+      <circle class="hd" data-h="p1" cx="${x1}" cy="${y1}" r="${s}" style="cursor:move"/>
+      <circle class="hd" data-h="p2" cx="${x2}" cy="${y2}" r="${s}" style="cursor:move"/>
+    </g>`;
+    return;
+  }
   const b = localBox(o);
   if(!(b.w > 0) || !(b.h > 0)) return;
   const t = rotAttr(o), u = unit(), s = u*0.6;
@@ -984,10 +1009,11 @@ function objPanel(o){
        </div>
        </div>`
     : `<div class="sec">${secHead('Transform',
-         'pixels · ROT in degrees · drag a corner on the artboard, or the dot above it to rotate')}
+         isLine ? 'pixels · drag either end on the artboard to reposition or re-angle it'
+                : 'pixels · ROT in degrees · drag a corner on the artboard, or the dot above it to rotate')}
          ${num('W','w',Math.round(o.w))}
          ${num('H','h',Math.round(o.h))}
-         ${num('ROT','rot',o.rot||0)}
+         ${isLine ? '' : num('ROT','rot',o.rot||0)}
          ${o.type === 'rect' ? num('RADIUS','rx',o.rx||0) : ''}
          ${num('OPACITY','op',o.op??100)}
        </div>`;
@@ -1435,6 +1461,9 @@ svgEl.addEventListener('pointerdown', e => {
     commit();
     drag = h.dataset.h === 'rot'
       ? { mode:'rot', o, c, a0: Math.atan2(lp.y-c.y, lp.x-c.x)*180/Math.PI, r0: o.rot||0, moved:false }
+      : (h.dataset.h === 'p1' || h.dataset.h === 'p2')
+      ? { mode:'lineEnd', o, end: h.dataset.h,
+          far: h.dataset.h === 'p1' ? {x:o.x+o.w, y:o.y+o.h} : {x:o.x, y:o.y}, moved:false }
       : { mode:'scale', o, k: h.dataset.h, b: localBox(o), moved:false };
     return;
   }
@@ -1582,6 +1611,22 @@ addEventListener('pointermove', e => {
     r = free ? Math.round(r) : Math.round(r/15)*15;
     o.rot = ((Math.round(r) % 360) + 360) % 360;
 
+  } else if(drag.mode === 'lineEnd'){
+    /* the other end (drag.far) stays put in o's own frame — this end
+       becomes whatever the pointer is now pointing at, so o.w/o.h (and
+       o.x/o.y when it's p1 that's moving) fall out directly, no anchor
+       math needed the way a box resize needs one */
+    let q = unrot(localPoint(p), o);
+    if(!free){ q = { x: snapV(q.x), y: snapH(q.y) }; }
+    if(drag.end === 'p1'){
+      o.x = q.x; o.y = q.y;
+      o.w = drag.far.x - o.x; o.h = drag.far.y - o.y;
+    } else {
+      o.w = q.x - drag.far.x; o.h = q.y - drag.far.y;
+      o.x = drag.far.x; o.y = drag.far.y;
+    }
+    snapG = { v:null, h:null };
+
   } else {                                   /* scale */
     let q = unrot(localPoint(p), o);
     /* snap the dragged corner to the grid/guides, but only for an upright
@@ -1653,7 +1698,7 @@ function add(type){
   : type === 'half'     ? {...base, type:'half', h: Math.round(doc.h/6)}
   : type === 'ellipse'  ? {...base, type:'ellipse'}
   : type === 'triangle' ? {...base, type:'triangle'}
-  : type === 'line'     ? {...base, type:'line', h: Math.round(doc.h/24), sw: Math.max(1, Math.round(doc.w/240))}
+  : type === 'line'     ? {...base, type:'line', h: 0, sw: Math.max(1, Math.round(doc.w/240))}
   : {...base, type:'rect'};
   activeList().push(o); sel = [o.id]; tab = 'selection'; touch();
 }
