@@ -55,7 +55,8 @@ input,textarea{font:inherit;border-radius:0}
 #stage{position:fixed;inset:0;display:grid;place-items:center;padding:0;transition:padding var(--t)}
 body.edit #stage{padding:0 var(--pan) var(--stat) var(--rail)}
 #board{position:relative;height:min(90vh,900px);aspect-ratio:var(--ar,3/4);
-  box-shadow:0 1px 2px rgba(0,0,0,.22),0 18px 52px rgba(0,0,0,.3);transition:height var(--t)}
+  box-shadow:0 1px 2px rgba(0,0,0,.22),0 18px 52px rgba(0,0,0,.3);transition:height var(--t);
+  transform:translate(var(--panx,0px),var(--pany,0px)) scale(var(--zoom,1))}
 body.edit #board{height:min(78vh,820px)}
 #board svg{display:block;width:100%;height:100%;user-select:none;touch-action:none}
 #guides{opacity:0;pointer-events:none;transition:opacity var(--t)}
@@ -76,6 +77,10 @@ body.edit.grid #gridlines{opacity:1}
 .hd:hover{fill:#000;stroke:#fff}
 .hd-l{stroke:#000;stroke-width:1;vector-effect:non-scaling-stroke;pointer-events:none}
 body.edit .o{cursor:move}
+body.space #stage{cursor:grab}
+body.space .o{cursor:grab}
+body.panning #stage{cursor:grabbing}
+body.panning .o{cursor:grabbing}
 
 
 
@@ -296,7 +301,7 @@ body.edit #status{transform:none}
   <button class="tl touch" id="t-snap"><span>SNAP</span><span class="k">ON</span></button>
   <button class="tl touch" id="t-undo"><span>UNDO</span></button>
   <button class="tl touch" id="t-view"><span>VIEW</span></button>
-  <div class="rf">⌘K commands<br>⌘Z undo<br>⌘S save<br>G grid<br>⌥/ctrl free<br>ESC view</div>
+  <div class="rf">⌘K commands<br>⌘Z undo<br>⌘S save<br>G grid<br>⌥/ctrl free<br>⌃ scroll zoom<br>scroll / ␣ drag pan<br>⌘0 reset view<br>ESC view</div>
 </aside>
 
 <aside id="panel" class="cr"></aside>
@@ -391,7 +396,8 @@ const $  = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 
 let doc     = JSON.parse($('#doc-data').textContent);
-let sel     = null, dirty = false, snap = true, drag = null, handle = null;
+let sel     = null, dirty = false, snap = true, drag = null, handle = null, zoom = 1;
+let panX    = 0, panY = 0, spaceDown = false;
 let undoS   = [], redoS = [];
 const svgEl = $('#doc-svg');
 const CAN_WRITE = 'showSaveFilePicker' in window;
@@ -435,7 +441,7 @@ function snapLinesH(){
 }
 let snapG = { v:null, h:null };
 const SNAPTOL = () => {
-  const bw = document.getElementById('board').clientWidth || doc.w;
+  const bw = document.getElementById('board').getBoundingClientRect().width || doc.w;
   return 7 * (doc.w / bw);                       /* ~7 screen px, whatever the zoom */
 };
 /* offsets (relative to the object's stored x/y) of the points snapping
@@ -1035,6 +1041,13 @@ svgEl.addEventListener('pointerdown', e => {
 addEventListener('pointermove', e => {
   if(!drag) return;
   e.preventDefault();
+
+  if(drag.mode === 'pan'){
+    panX = drag.x0 + (e.clientX - drag.px0); panY = drag.y0 + (e.clientY - drag.py0);
+    drag.moved = true; applyPan();
+    return;
+  }
+
   const o = drag.o, free = !snap || e.altKey || e.ctrlKey;   /* ⌥ or ctrl */
   const p = toSvg(e);
 
@@ -1086,6 +1099,7 @@ addEventListener('pointermove', e => {
 
 const endDrag = () => {
   if(!drag) return;
+  if(drag.mode === 'pan'){ document.body.classList.remove('panning'); drag = null; return; }
   if(drag.mode === 'guide'){
     const g = guides(), v = g[drag.axis][drag.index];
     const limit = drag.axis === 'v' ? doc.w : doc.h;
@@ -1459,6 +1473,7 @@ addEventListener('keydown', e => {
   if(mod && k === 's'){ e.preventDefault(); save(); return; }
   if(mod && k === 'z'){ e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if(mod && k === 'd'){ e.preventDefault(); dup(); return; }
+  if(mod && k === '0'){ e.preventDefault(); resetView(); return; }
 
   if(open){
     if(e.key === 'Escape') cmdClose();
@@ -1505,6 +1520,59 @@ $('#stage').addEventListener('pointerdown', e => {
   if(!document.body.classList.contains('edit') || e.target.closest('#board')) return;
   if(sel !== null){ sel = null; marks(); panel(); }
 });
+/* ── zoom + pan ──────────────────────────────────────────────────────
+   ⌃/⌘ + scroll zooms the artboard in place. A trackpad pinch is reported
+   by every browser as a wheel event with ctrlKey set, regardless of OS,
+   so this one check also covers Mac trackpad pinch-to-zoom for free.
+   transform-origin tracks the cursor so the point under it stays put.
+   Plain scroll pans — deltaX/deltaY straight through, which also covers
+   shift+wheel on a vertical-only mouse: browsers already remap that to
+   deltaX before the event reaches us. Holding Space and dragging pans
+   too, for anyone without a wheel/trackpad handy — the classic "hand
+   tool". */
+const ZOOM_MIN = .2, ZOOM_MAX = 8;
+function setZoom(z, cx, cy){
+  zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+  const board = $('#board');
+  if(cx !== undefined){
+    const r = board.getBoundingClientRect();
+    board.style.transformOrigin = `${(cx-r.left)/r.width*100}% ${(cy-r.top)/r.height*100}%`;
+  }
+  board.style.setProperty('--zoom', zoom);
+}
+function applyPan(){
+  $('#board').style.setProperty('--panx', panX + 'px');
+  $('#board').style.setProperty('--pany', panY + 'px');
+}
+function resetView(){
+  $('#board').style.transformOrigin = '';
+  panX = 0; panY = 0; applyPan();
+  setZoom(1);
+}
+$('#stage').addEventListener('wheel', e => {
+  e.preventDefault();
+  if(e.ctrlKey || e.metaKey){ setZoom(zoom * Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY); return; }
+  panX -= e.deltaX; panY -= e.deltaY;
+  applyPan();
+}, {passive:false});
+addEventListener('keydown', e => {
+  if(e.key !== ' ' || spaceDown || ['INPUT','TEXTAREA'].includes(e.target.tagName)) return;
+  spaceDown = true; document.body.classList.add('space');
+});
+addEventListener('keyup', e => {
+  if(e.key !== ' ') return;
+  spaceDown = false; document.body.classList.remove('space');
+});
+/* capture on window, not #stage: a capturing listener on #stage itself
+   isn't guaranteed to run before #stage's own bubble-phase listener when
+   #stage is the direct target (e.g. a click on the empty margin) — an
+   ancestor's capture phase always precedes a descendant's, unambiguously */
+addEventListener('pointerdown', e => {
+  if(!spaceDown || !e.target.closest('#stage')) return;
+  e.preventDefault(); e.stopPropagation();
+  drag = { mode:'pan', px0:e.clientX, py0:e.clientY, x0:panX, y0:panY, moved:false };
+  document.body.classList.add('panning');
+}, {capture:true});
 $('#ver').textContent = VERSION;
 addEventListener('resize', marks);
 if(document.fonts) document.fonts.ready.then(renderSVG);
