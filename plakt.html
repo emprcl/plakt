@@ -311,7 +311,7 @@ body.edit #status{transform:none}
   <button class="tl touch" id="t-snap"><span>SNAP</span><span class="k">ON</span></button>
   <button class="tl touch" id="t-undo"><span>UNDO</span></button>
   <button class="tl touch" id="t-view"><span>VIEW</span></button>
-  <div class="rf">⌘K commands<br>⌘Z undo<br>⌘S save<br>G grid<br>⌥/ctrl free<br>⇧ click multi-select<br>⌃ scroll zoom<br>scroll / ␣ drag pan<br>⌘0 reset view<br>ESC view</div>
+  <div class="rf">⌘K for commands &amp; shortcuts</div>
 </aside>
 
 <aside id="panel" class="cr"></aside>
@@ -2269,6 +2269,8 @@ const CMDS = [
   {n:'Export PNG @4x',   k:'',   f:()=>exportPNG(4)},
   {n:'Export SVG',       k:'',   f:exportSVG},
   {n:'Save',             k:'⌘S', f:save},
+  {n:'Reset zoom/pan',   k:'⌘0', f:resetView},
+  {n:'Enter edit mode',  k:'E',  f:()=>mode(true)},
   {n:'Leave edit mode',  k:'ESC',f:()=>mode(false)}
 ];
 
