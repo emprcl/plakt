@@ -76,6 +76,7 @@ body.edit.grid #gridlines{opacity:1}
 .hd{fill:#fff;stroke:#000;stroke-width:1;vector-effect:non-scaling-stroke}
 .hd:hover{fill:#000;stroke:#fff}
 .hd-l{stroke:#000;stroke-width:1;vector-effect:non-scaling-stroke;pointer-events:none}
+#marquee rect{fill:rgba(255,255,255,.1);stroke:#fff;stroke-width:1;vector-effect:non-scaling-stroke;pointer-events:none}
 body.edit .o{cursor:move}
 body.space #stage{cursor:grab}
 body.space .o{cursor:grab}
@@ -301,7 +302,7 @@ body.edit #status{transform:none}
   <button class="tl touch" id="t-snap"><span>SNAP</span><span class="k">ON</span></button>
   <button class="tl touch" id="t-undo"><span>UNDO</span></button>
   <button class="tl touch" id="t-view"><span>VIEW</span></button>
-  <div class="rf">⌘K commands<br>⌘Z undo<br>⌘S save<br>G grid<br>⌥/ctrl free<br>⌃ scroll zoom<br>scroll / ␣ drag pan<br>⌘0 reset view<br>ESC view</div>
+  <div class="rf">⌘K commands<br>⌘Z undo<br>⌘S save<br>G grid<br>⌥/ctrl free<br>⇧ click multi-select<br>⌃ scroll zoom<br>scroll / ␣ drag pan<br>⌘0 reset view<br>ESC view</div>
 </aside>
 
 <aside id="panel" class="cr"></aside>
@@ -396,7 +397,7 @@ const $  = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 
 let doc     = JSON.parse($('#doc-data').textContent);
-let sel     = null, dirty = false, snap = true, drag = null, handle = null, zoom = 1;
+let sel     = [], dirty = false, snap = true, drag = null, handle = null, zoom = 1;   // sel: array of selected ids
 let panX    = 0, panY = 0, spaceDown = false;
 let undoS   = [], redoS = [];
 const svgEl = $('#doc-svg');
@@ -519,11 +520,12 @@ function commit(){ undoS.push(snapshot()); if(undoS.length > 80) undoS.shift(); 
 function undo(){
   if(!undoS.length) return flash('nothing to undo');
   redoS.push(snapshot()); doc = JSON.parse(undoS.pop());
-  sel = doc.objects.some(o => o.id === sel) ? sel : null; dirty = true; full();
+  sel = sel.filter(id => doc.objects.some(o => o.id === id)); dirty = true; full();
 }
 function redo(){
   if(!redoS.length) return flash('nothing to redo');
-  undoS.push(snapshot()); doc = JSON.parse(redoS.pop()); dirty = true; full();
+  undoS.push(snapshot()); doc = JSON.parse(redoS.pop());
+  sel = sel.filter(id => doc.objects.some(o => o.id === id)); dirty = true; full();
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -653,7 +655,8 @@ function renderSVG(){
     `<g id="gridlines" fill="#ff2e88" fill-opacity=".16">${gridSVG()}</g>` +
     doc.objects.map(shapeSVG).join('') +
     `<g id="guides">${guidesSVG()}</g>` +
-    `<g id="handles"></g>`;
+    `<g id="handles"></g>` +
+    `<g id="marquee"></g>`;
   textHits();
   marks();
 }
@@ -684,12 +687,37 @@ function patch(o){
 function localBox(o){
   return o.type === 'text' ? textBox(o) : box(o);
 }
+/* the objects `sel` (an array of ids) currently points to, in stack order */
+const selectedObjs = () => sel.map(id => doc.objects.find(o => o.id === id)).filter(Boolean);
+/* the axis-aligned box enclosing every selected object's own box — used
+   to snap a multi-drag as one rigid unit instead of each member on its own */
+function groupBoxOf(ids){
+  const bs = ids.map(id => doc.objects.find(o => o.id === id)).filter(Boolean).map(localBox).filter(b => b.w > 0 && b.h > 0);
+  if(!bs.length) return {x:0,y:0,w:0,h:0};
+  const x0 = Math.min(...bs.map(b=>b.x)), y0 = Math.min(...bs.map(b=>b.y));
+  const x1 = Math.max(...bs.map(b=>b.x+b.w)), y1 = Math.max(...bs.map(b=>b.y+b.h));
+  return {x:x0, y:y0, w:x1-x0, h:y1-y0};
+}
 
+/* a single selected object gets full resize/rotate handles; a multi-
+   selection just outlines every member — dragging any one of them still
+   moves the whole group (see the 'move' branch in pointermove) */
 function marks(){
   const h = $('#handles'); if(!h) return;
   h.innerHTML = '';
+  if(!document.body.classList.contains('edit')) return;
+  if(sel.length > 1){
+    h.innerHTML = selectedObjs().map(o => {
+      const b = localBox(o); if(!(b.w > 0) || !(b.h > 0)) return '';
+      return `<g${rotAttr(o)}>
+        <rect class="sel-o" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}"/>
+        <rect class="sel-i" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}"/>
+      </g>`;
+    }).join('');
+    return;
+  }
   const o = cur();
-  if(!o || !document.body.classList.contains('edit')) return;
+  if(!o) return;
   const b = localBox(o);
   if(!(b.w > 0) || !(b.h > 0)) return;
   const t = rotAttr(o), u = unit(), s = u*0.6;
@@ -705,7 +733,10 @@ function marks(){
   </g>`;
 }
 
-const cur  = () => doc.objects.find(o => o.id === sel) || null;
+/* cur() is the single object being edited in detail — it's null while
+   nothing or more than one thing is selected; multi-select drives group
+   move/delete/duplicate instead (see selectedObjs()) */
+const cur  = () => sel.length === 1 ? doc.objects.find(o => o.id === sel[0]) || null : null;
 const full = () => { renderSVG(); panel(); status(); };
 const touch = () => { dirty = true; full(); };
 
@@ -796,13 +827,13 @@ let tab = 'artboard';
 function docPanel(){
   if(tab === 'layers'){
     const layers = [...doc.objects].reverse().map(o => `
-      <button class="ly ${o.id===sel?'on':''}" data-pick="${o.id}">
+      <button class="ly ${sel.includes(o.id)?'on':''}" data-pick="${o.id}">
         <span class="ch" style="background:${fillHex(o.fill)}"></span>
         <span class="t">${o.type === 'text' ? esc(o.str.split('\n')[0].slice(0,18)) : o.type}</span>
         <span class="x">#${o.id}</span>
       </button>`).join('') || '<div class="tip" style="margin:0">nothing on the artboard yet</div>';
     return `<div class="sec" style="border:0">
-      ${secHead('Stack', 'topmost first · <b>[</b> and <b>]</b> reorder the selection', '<em>top first</em>')}${layers}
+      ${secHead('Stack', 'topmost first · <b>[</b> and <b>]</b> reorder the selection · <b>⇧</b> click to add', '<em>top first</em>')}${layers}
     </div>`;
   }
 
@@ -843,19 +874,33 @@ function docPanel(){
   </div>`;
 }
 
-function tabsHTML(o){
+function tabsHTML(o, multi){
   const t = (id, label, badge='') =>
     `<button class="tab ${tab===id?'on':''}" data-tab="${id}">${label}${badge?` <em>${badge}</em>`:''}</button>`;
   return `<div class="tabs">
-    ${o ? t('selection', o.type) : ''}
+    ${o ? t('selection', o.type) : multi ? t('selection', 'Selection', sel.length) : ''}
     ${t('artboard','Artboard')}
     ${t('layers','Layers', doc.objects.length)}
   </div>`;
 }
+/* shown instead of objPanel() while more than one object is selected —
+   no per-type property editing, just the group-level actions */
+function multiPanel(){
+  const kinds = [...new Set(selectedObjs().map(o => o.type))].join(', ');
+  return `<div class="sec">
+    ${secHead('Selection', 'drag any one of them to move the whole group · arrow keys nudge all of them',
+      `<em>${sel.length} objects</em>`)}
+    <div class="tip" style="margin:0">${kinds}</div>
+    <div class="r" style="margin-top:8px">
+      <button class="alb" id="msDup" style="width:auto;padding:5px 10px">⌘D DUPLICATE</button>
+      <button class="alb" id="msDel" style="width:auto;padding:5px 10px">⌫ DELETE</button>
+    </div>
+  </div>`;
+}
 function panel(){
-  const o = cur();
-  if(!o && tab === 'selection') tab = 'artboard';
-  $('#panel').innerHTML = tabsHTML(o) + (tab === 'selection' && o ? objPanel(o) : docPanel());
+  const o = cur(), multi = sel.length > 1;
+  if(!o && !multi && tab === 'selection') tab = 'artboard';
+  $('#panel').innerHTML = tabsHTML(o, multi) + (tab === 'selection' && (o || multi) ? (o ? objPanel(o) : multiPanel()) : docPanel());
   wire(); sync();
 }
 
@@ -916,6 +961,7 @@ function sync(){
   const o = cur();
   $('#msg').textContent = o
     ? `${o.type.toUpperCase()} · ${Math.round(o.x)} , ${Math.round(o.y)}${o.rot ? ' · ' + o.rot + '°' : ''}`
+    : sel.length > 1 ? `${sel.length} objects selected`
     : `${doc.cols}×${doc.rows} grid · ${doc.objects.length} object${doc.objects.length===1?'':'s'}`;
 }
 
@@ -950,7 +996,13 @@ function wire(){
     i.addEventListener('focus', commit, {once:true});
     i.oninput = () => { doc.palette.find(p => p.id === i.dataset.edit).hex = i.value; dirty = true; renderSVG(); status(); };
   });
-  $$('#panel .ly[data-pick]').forEach(b => b.onclick = () => { sel = +b.dataset.pick; tab = 'selection'; full(); });
+  $$('#panel .ly[data-pick]').forEach(b => b.onclick = e => {
+    const id = +b.dataset.pick;
+    sel = e.shiftKey ? (sel.includes(id) ? sel.filter(s => s !== id) : [...sel, id]) : [id];
+    tab = 'selection'; full();
+  });
+  const msDup = $('#msDup'); if(msDup) msDup.onclick = dup;
+  const msDel = $('#msDel'); if(msDel) msDel.onclick = del;
 
   const ts = $('#tstr');
   if(ts){
@@ -1030,11 +1082,29 @@ svgEl.addEventListener('pointerdown', e => {
   }
 
   const t = e.target.closest('[data-id],[data-hit]');
-  if(!t){ sel = null; marks(); panel(); return; }
-  sel = +(t.dataset.id ?? t.dataset.hit); tab = 'selection';
-  const o = cur();
+  if(!t){
+    /* empty canvas: a plain click clears the selection (as before); a
+       drag from here rubber-bands a marquee. ⇧ keeps what's already
+       selected and adds whatever the marquee covers. */
+    if(!e.shiftKey) sel = [];
+    drag = { mode:'marquee', base:[...sel], px0:p.x, py0:p.y, moved:false };
+    marks(); panel();
+    return;
+  }
+
+  const id = +(t.dataset.id ?? t.dataset.hit);
+  if(e.shiftKey){
+    sel = sel.includes(id) ? sel.filter(s => s !== id) : [...sel, id];
+    tab = 'selection'; marks(); panel();
+    return;                        /* toggle only — drag needs a fresh press */
+  }
+  /* clicking a fresh object replaces the selection; clicking a member of
+     an existing multi-selection keeps the group so it can be dragged as one */
+  if(!sel.includes(id)) sel = [id];
+  tab = 'selection';
   commit();
-  drag = { mode:'move', o, px0:p.x, py0:p.y, x0:o.x, y0:o.y, moved:false };
+  const objs = selectedObjs().map(o => ({ o, x0:o.x, y0:o.y }));
+  drag = { mode:'move', objs, groupBox: groupBoxOf(sel), px0:p.x, py0:p.y, moved:false };
   marks(); panel();
 });
 
@@ -1048,25 +1118,56 @@ addEventListener('pointermove', e => {
     return;
   }
 
-  const o = drag.o, free = !snap || e.altKey || e.ctrlKey;   /* ⌥ or ctrl */
   const p = toSvg(e);
+
+  if(drag.mode === 'marquee'){
+    const x0 = Math.min(drag.px0, p.x), x1 = Math.max(drag.px0, p.x);
+    const y0 = Math.min(drag.py0, p.y), y1 = Math.max(drag.py0, p.y);
+    const hit = doc.objects.filter(o => {
+      const b = localBox(o);
+      return b.x < x1 && b.x + b.w > x0 && b.y < y1 && b.y + b.h > y0;
+    }).map(o => o.id);
+    sel = e.shiftKey ? [...new Set([...drag.base, ...hit])] : hit;
+    $('#marquee').innerHTML = `<rect x="${x0}" y="${y0}" width="${x1-x0}" height="${y1-y0}"/>`;
+    drag.moved = true; marks(); status();
+    return;
+  }
+
+  if(drag.mode === 'move'){
+    const free = !snap || e.altKey || e.ctrlKey;   /* ⌥ or ctrl */
+    let dx = p.x - drag.px0, dy = p.y - drag.py0;
+    if(drag.objs.length === 1){
+      const { o, x0, y0 } = drag.objs[0];
+      let rx = x0 + dx, ry = y0 + dy;
+      const b = localBox(o);
+      if(free) snapG = { v:null, h:null };
+      else [rx, ry] = snapToGuides(rx, ry, b.w, b.h, o);
+      dx = rx - x0; dy = ry - y0;
+    } else if(free){
+      snapG = { v:null, h:null };
+    } else {
+      const gb = drag.groupBox;                    /* snap the group as one rigid unit */
+      const [sx, sy] = snapToGuides(gb.x + dx, gb.y + dy, gb.w, gb.h);
+      dx = sx - gb.x; dy = sy - gb.y;
+    }
+    drag.objs.forEach(({ o, x0, y0 }) => setPos(o, x0 + dx, y0 + dy));
+    if(snapG.v !== null || snapG.h !== null){
+      const gl = document.getElementById('guides');
+      if(gl) gl.innerHTML = guidesSVG();
+    }
+    drag.moved = true; dirty = true;
+    drag.objs.forEach(({ o }) => patch(o));
+    marks(); live(drag.objs[0].o); status();
+    return;
+  }
+
+  const o = drag.o, free = !snap || e.altKey || e.ctrlKey;   /* ⌥ or ctrl — rot/scale only */
 
   if(drag.mode === 'guide'){
     const g = guides();
     g[drag.axis][drag.index] = Math.round(drag.axis === 'v' ? p.x : p.y);
     drag.moved = true; dirty = true; renderSVG(); status();
     return;
-
-  } else if(drag.mode === 'move'){
-    let rx = drag.x0 + (p.x - drag.px0), ry = drag.y0 + (p.y - drag.py0);
-    const b = localBox(o);
-    if(free) snapG = { v:null, h:null };
-    else [rx, ry] = snapToGuides(rx, ry, b.w, b.h, o);
-    setPos(o, rx, ry);
-    if(snapG.v !== null || snapG.h !== null){
-      const gl = document.getElementById('guides');
-      if(gl) gl.innerHTML = guidesSVG();
-    }
 
   } else if(drag.mode === 'rot'){
     const a = Math.atan2(p.y - drag.c.y, p.x - drag.c.x)*180/Math.PI;
@@ -1100,6 +1201,7 @@ addEventListener('pointermove', e => {
 const endDrag = () => {
   if(!drag) return;
   if(drag.mode === 'pan'){ document.body.classList.remove('panning'); drag = null; return; }
+  if(drag.mode === 'marquee'){ $('#marquee').innerHTML = ''; drag = null; panel(); return; }
   if(drag.mode === 'guide'){
     const g = guides(), v = g[drag.axis][drag.index];
     const limit = drag.axis === 'v' ? doc.w : doc.h;
@@ -1136,13 +1238,21 @@ function add(type){
   : type === 'half'    ? {...base, type:'half', h: Math.round(doc.h/6)}
   : type === 'ellipse' ? {...base, type:'ellipse'}
   : {...base, type:'rect'};
-  doc.objects.push(o); sel = o.id; tab = 'selection'; touch();
+  doc.objects.push(o); sel = [o.id]; tab = 'selection'; touch();
 }
-function dup(){ const o = cur(); if(!o) return; commit();
+function dup(){
+  const objs = selectedObjs(); if(!objs.length) return; commit();
   const off = Math.round(Math.max(doc.w,doc.h)/40);
-  const c = {...o, id:nextId(), x:o.x+off, y:o.y+off}; doc.objects.push(c); sel = c.id; touch(); }
-function del(){ if(sel === null) return; commit();
-  doc.objects = doc.objects.filter(o => o.id !== sel); sel = null; touch(); }
+  sel = objs.map(o => {
+    const c = {...o, id:nextId(), x:o.x+off, y:o.y+off};
+    doc.objects.push(c); return c.id;
+  });
+  touch();
+}
+function del(){
+  if(!sel.length) return; commit();
+  doc.objects = doc.objects.filter(o => !sel.includes(o.id)); sel = []; touch();
+}
 
 /* ── clipboard ───────────────────────────────────────────────────────
    Objects travel as their own greppable JSON, wrapped so we can tell it's
@@ -1167,12 +1277,11 @@ function pasteClip(d){
   commit();
   (d.palette || []).forEach(p => { if(!doc.palette.some(q => q.id === p.id)) doc.palette.push({...p}); });
   const off = Math.round(Math.max(doc.w,doc.h)/40);
-  let last = null;
-  d.objects.forEach(src => {
+  const pasted = d.objects.map(src => {
     const o = {...src, id: nextId(), x:(src.x||0)+off, y:(src.y||0)+off};
-    doc.objects.push(o); last = o.id;
+    doc.objects.push(o); return o.id;
   });
-  sel = last; tab = 'selection'; touch(); flash('pasted');
+  sel = pasted; tab = 'selection'; touch(); flash('pasted');
   return true;
 }
 const inField = () => ['INPUT','TEXTAREA'].includes((document.activeElement||{}).tagName);
@@ -1181,17 +1290,17 @@ const inField = () => ['INPUT','TEXTAREA'].includes((document.activeElement||{})
    browser's own clipboard wins — we bow out. */
 addEventListener('copy', e => {
   if(!document.body.classList.contains('edit') || inField()) return;
-  const o = cur(); if(!o || !e.clipboardData) return;
-  clip = clipData([o]);
+  const objs = selectedObjs(); if(!objs.length || !e.clipboardData) return;
+  clip = clipData(objs);
   e.clipboardData.setData('text/plain', JSON.stringify(clip));
-  e.preventDefault(); flash('copied ' + o.type);
+  e.preventDefault(); flash('copied ' + objs.length + (objs.length===1?' '+objs[0].type:' objects'));
 });
 addEventListener('cut', e => {
   if(!document.body.classList.contains('edit') || inField()) return;
-  const o = cur(); if(!o || !e.clipboardData) return;
-  clip = clipData([o]);
+  const objs = selectedObjs(); if(!objs.length || !e.clipboardData) return;
+  clip = clipData(objs);
   e.clipboardData.setData('text/plain', JSON.stringify(clip));
-  e.preventDefault(); del(); flash('cut ' + o.type);
+  e.preventDefault(); del(); flash('cut ' + objs.length + (objs.length===1?' '+objs[0].type:' objects'));
 });
 addEventListener('paste', e => {
   if(!document.body.classList.contains('edit') || inField()) return;
@@ -1202,11 +1311,11 @@ addEventListener('paste', e => {
 /* the command-palette versions can't ride a clipboard event, so they use the
    async API when it's allowed and fall back to the in-app buffer */
 function copyCmd(){
-  const o = cur(); if(!o) return flash('nothing selected');
-  clip = clipData([o]);
+  const objs = selectedObjs(); if(!objs.length) return flash('nothing selected');
+  clip = clipData(objs);
   if(navigator.clipboard && navigator.clipboard.writeText)
     navigator.clipboard.writeText(JSON.stringify(clip)).catch(()=>{});
-  flash('copied ' + o.type);
+  flash('copied ' + objs.length + (objs.length===1?' '+objs[0].type:' objects'));
 }
 function pasteCmd(){
   const fromBuf = () => clip ? pasteClip(clip) : flash('nothing to paste');
@@ -1215,7 +1324,8 @@ function pasteCmd(){
   else fromBuf();
 }
 function order(d){
-  const i = doc.objects.findIndex(o => o.id === sel); if(i < 0) return;
+  if(sel.length !== 1) return;                  /* reordering a multi-selection is ambiguous */
+  const i = doc.objects.findIndex(o => o.id === sel[0]); if(i < 0) return;
   const j = i + d; if(j < 0 || j >= doc.objects.length) return;
   commit(); [doc.objects[i], doc.objects[j]] = [doc.objects[j], doc.objects[i]]; touch();
 }
@@ -1383,7 +1493,7 @@ async function exportPNG(scale){
    ═══════════════════════════════════════════════════════════════════ */
 function mode(on){
   document.body.classList.toggle('edit', on);
-  if(!on) sel = null;
+  if(!on) sel = [];
   marks(); panel(); status();
 }
 function status(){
@@ -1405,7 +1515,7 @@ const CMDS = [
   {n:'Duplicate',        k:'⌘D', f:dup},
   {n:'Copy',             k:'⌘C', f:copyCmd},
   {n:'Paste',            k:'⌘V', f:pasteCmd},
-  {n:'Cut',              k:'⌘X', f:()=>{ const o=cur(); if(!o) return flash('nothing selected'); clip=clipData([o]); if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(JSON.stringify(clip)).catch(()=>{}); del(); flash('cut '+o.type); }},
+  {n:'Cut',              k:'⌘X', f:()=>{ const objs=selectedObjs(); if(!objs.length) return flash('nothing selected'); clip=clipData(objs); if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(JSON.stringify(clip)).catch(()=>{}); del(); flash('cut '+objs.length+(objs.length===1?' '+objs[0].type:' objects')); }},
   {n:'Delete',           k:'⌫',  f:del},
   {n:'Rotate 90°',       k:'⇧R', f:rot90},
   {n:'Reset rotation',   k:'',   f:resetRot},
@@ -1422,9 +1532,9 @@ const CMDS = [
   {n:'Undo',             k:'⌘Z', f:undo},
   {n:'Redo',             k:'⇧⌘Z',f:redo},
   {n:'Add palette swatch', k:'', f:addSwatch},
-  {n:'Rename plakt',     k:'',   f:()=>{ sel=null; tab='artboard'; panel(); const i=$('#docname'); if(i){i.focus();i.select();} }},
+  {n:'Rename plakt',     k:'',   f:()=>{ sel=[]; tab='artboard'; panel(); const i=$('#docname'); if(i){i.focus();i.select();} }},
   {n:'Load sample plakt', k:'', f:sample},
-  {n:'Clear artboard',   k:'',   f:()=>{commit();doc.objects=[];sel=null;touch()}},
+  {n:'Clear artboard',   k:'',   f:()=>{commit();doc.objects=[];sel=[];touch()}},
   {n:'Export PNG @1x',   k:'',   f:()=>exportPNG(1)},
   {n:'Export PNG @2x',   k:'',   f:()=>exportPNG(2)},
   {n:'Export PNG @4x',   k:'',   f:()=>exportPNG(4)},
@@ -1445,7 +1555,7 @@ function sample(){
     {id:6,type:'text',x:134,y:1389,w:932,al:'l',str:'AUSSTELLUNG',font:'Poppins',size:60,tr:10,wt:500,lh:0,fill:'INK'},
     {id:7,type:'text',x:134,y:1464,w:932,al:'l',str:'WEIMAR · JULI—SEPT',font:'Poppins',size:60,tr:10,wt:500,lh:0,fill:'RED'}
   ];
-  sel = null; touch();
+  sel = []; touch();
 }
 
 /* ── command palette ─────────────────────────────────────────────── */
@@ -1487,7 +1597,7 @@ addEventListener('keydown', e => {
 
   const edit = document.body.classList.contains('edit');
   if(k === 'e' && !edit){ mode(true); return; }
-  if(e.key === 'Escape'){ if(sel !== null){ sel = null; marks(); panel(); } else mode(false); return; }
+  if(e.key === 'Escape'){ if(sel.length){ sel = []; marks(); panel(); } else mode(false); return; }
   if(!edit) return;
 
   if(e.shiftKey && k === 'r'){ rot90(); return; }
@@ -1498,13 +1608,13 @@ addEventListener('keydown', e => {
   if(e.key === '['){ order(-1); return; }
   if(e.key === 'Backspace' || e.key === 'Delete'){ e.preventDefault(); del(); return; }
 
-  if(e.key.startsWith('Arrow') && sel !== null){
+  if(e.key.startsWith('Arrow') && sel.length){
     e.preventDefault();
-    const o = cur(), step = e.shiftKey ? 10 : 1;   /* ⇧ nudges by 10px */
+    const step = e.shiftKey ? 10 : 1;   /* ⇧ nudges by 10px */
     const d = e.key === 'ArrowLeft' ? [-1,0] : e.key === 'ArrowRight' ? [1,0]
             : e.key === 'ArrowUp' ? [0,-1] : [0,1];
     commit();
-    o.x += d[0]*step; o.y += d[1]*step;
+    selectedObjs().forEach(o => { o.x += d[0]*step; o.y += d[1]*step; });
     touch();
   }
 });
@@ -1518,7 +1628,7 @@ $('#stage').addEventListener('dblclick', () => { if(!document.body.classList.con
 /* click the stage margin — anywhere off the artboard — to clear the selection */
 $('#stage').addEventListener('pointerdown', e => {
   if(!document.body.classList.contains('edit') || e.target.closest('#board')) return;
-  if(sel !== null){ sel = null; marks(); panel(); }
+  if(sel.length){ sel = []; marks(); panel(); }
 });
 /* ── zoom + pan ──────────────────────────────────────────────────────
    ⌃/⌘ + scroll zooms the artboard in place. A trackpad pinch is reported
