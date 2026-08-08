@@ -2138,6 +2138,32 @@ async function save(){
   download(html, slug() + '.html', 'text/html');
   dirty = false; status();
 }
+/* opening a file via the OS (double-click, drag onto the browser) gives the
+   page no way to write back to it — the File System Access API only ever
+   hands out a writable handle through an explicit picker call, as a
+   deliberate security boundary. So "open" is its own action here: pick a
+   plakt file through the same picker save() uses, load its doc straight
+   into the already-running app, and keep the handle so every save() from
+   then on writes back into that exact file with no dialog at all. */
+async function openFile(){
+  if(!CAN_WRITE) return flash("this browser can't write files directly — open the file itself instead of using ⌘O");
+  try{
+    const [h] = await showOpenFilePicker({
+      types:[{description:'Plakt', accept:{'text/html':['.html']}}]
+    });
+    const text = await (await h.getFile()).text();
+    const m = text.match(/<script type="application\/json" id="doc-data">([\s\S]*?)<\/script>/);
+    if(!m) throw new Error('not a plakt file');
+    doc = JSON.parse(m[1]);
+    handle = h; sel = []; entered = null; undoS = []; redoS = []; dirty = false;
+    resetView();
+    touch();
+    flash('opened ' + h.name + ' — ⌘S now saves back into it');
+  }catch(err){
+    if(err.name === 'AbortError') return;
+    flash('could not open that file — is it a plakt export?');
+  }
+}
 function download(data, name, type){
   saveURL(URL.createObjectURL(data instanceof Blob ? data : new Blob([data], {type})), name);
 }
@@ -2269,6 +2295,7 @@ const CMDS = [
   {n:'Export PNG @4x',   k:'',   f:()=>exportPNG(4)},
   {n:'Export SVG',       k:'',   f:exportSVG},
   {n:'Save',             k:'⌘S', f:save},
+  {n:'Open…',            k:'⌘O', f:openFile},
   {n:'Reset zoom/pan',   k:'⌘0', f:resetView},
   {n:'Enter edit mode',  k:'E',  f:()=>mode(true)},
   {n:'Leave edit mode',  k:'ESC',f:()=>mode(false)}
@@ -2312,6 +2339,7 @@ addEventListener('keydown', e => {
 
   if(mod && k === 'k'){ e.preventDefault(); open ? cmdClose() : cmdOpen(); return; }
   if(mod && k === 's'){ e.preventDefault(); save(); return; }
+  if(mod && k === 'o'){ e.preventDefault(); openFile(); return; }
   if(mod && k === 'z'){ e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if(mod && k === 'd'){ e.preventDefault(); dup(); return; }
   if(mod && k === 'g'){ e.preventDefault(); e.shiftKey ? ungroupSel() : groupSel(); return; }
