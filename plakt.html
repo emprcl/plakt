@@ -509,12 +509,54 @@ function mix(a, b, t){
   const c = (x,y) => Math.round(x + (y-x)*t).toString(16).padStart(2,'0');
   return '#' + c(r1,r2) + c(g1,g2) + c(b1,b2);
 }
+/* a fill is either a plain slot reference ("INK" or "INK@40") or a two-stop
+   gradient ("grad:ANGLE:FROM:TO:OFFSET:LENGTH") between two palette swatches
+   — OFFSET/LENGTH are % along the gradient line where the FROM→TO blend
+   starts and how much of the line it takes to finish (0/100 = the classic
+   corner-to-corner blend; a short LENGTH gives a hard edge instead of a
+   soft one; OFFSET > 0 leaves a solid band before the blend starts). Older
+   4-part strings still parse — they just default to 0/100. Swatch ids are
+   sanitised to [A-Z0-9] on rename, so ':' is always safe as a delimiter */
+const isGrad = f => String(f).startsWith('grad:');
+function parseGrad(f){
+  const [,ang,a,b,off,len] = String(f).split(':');
+  return { ang: +ang || 0, a, b, off: off !== undefined ? +off : 0, len: len !== undefined ? +len : 100 };
+}
+const mkGrad = (ang, a, b, off=0, len=100) =>
+  `grad:${((Math.round(ang)%360)+360)%360}:${a}:${b}:${Math.max(0,Math.min(100,Math.round(off)))}:${Math.max(0,Math.min(100,Math.round(len)))}`;
 function fillHex(f){
+  if(isGrad(f)){ const g = parseGrad(f); return mix(slotHex(g.a), slotHex(g.b), .5); }
   const [id, pct] = String(f).split('@');
   return pct ? mix(bg().hex, slotHex(id), +pct/100) : slotHex(id);
 }
 const fillSlot = f => String(f).split('@')[0];
 const fillPct  = f => { const p = String(f).split('@')[1]; return p ? +p : 100; };
+/* every palette slot a fill points at — one for a solid, two for a gradient —
+   so swatch rename/delete/copy can keep every reference in sync */
+const fillRefs = f => isGrad(f) ? [parseGrad(f).a, parseGrad(f).b] : [fillSlot(f)];
+/* CSS-side preview for panel chips (a real <linearGradient> is only needed
+   for the SVG canvas itself, via fillPaint/gradDefsSVG below) */
+const fillCSS = f => isGrad(f)
+  ? (g => `linear-gradient(${g.ang}deg, ${slotHex(g.a)} ${g.off}%, ${slotHex(g.b)} ${g.off+g.len}%)`)(parseGrad(f))
+  : fillHex(f);
+/* maps a gradient's full key to the <linearGradient> id rendering it this
+   frame — rebuilt by gradDefsSVG() at the top of every renderSVG() */
+let gradMap = new Map();
+const gradKey = f => (g => `${g.ang}:${g.a}:${g.b}:${g.off}:${g.len}`)(parseGrad(f));
+function gradDefsSVG(){
+  const keys = [...new Set(allObjects().filter(o => isGrad(o.fill)).map(o => gradKey(o.fill)))];
+  gradMap = new Map(keys.map((k,i) => [k, 'grad' + i]));
+  return keys.map((k,i) => {
+    const [ang,a,b,off,len] = k.split(':');
+    const o1 = Math.max(0, Math.min(100, +off))/100, o2 = Math.max(0, Math.min(100, +off + +len))/100;
+    return `<linearGradient id="grad${i}" gradientTransform="rotate(${ang} .5 .5)">
+      <stop offset="${o1}" stop-color="${slotHex(a)}"/><stop offset="${o2}" stop-color="${slotHex(b)}"/>
+    </linearGradient>`;
+  }).join('');
+}
+/* what actually goes in an SVG fill="" attribute — a solid hex, or a
+   url() reference into the <defs> gradDefsSVG() just built */
+const fillPaint = f => isGrad(f) ? `url(#${gradMap.get(gradKey(f))})` : fillHex(f);
 
 /* ── history ─────────────────────────────────────────────────────── */
 const snapshot = () => JSON.stringify(doc);
@@ -570,7 +612,7 @@ function groupTransform(o){
 function shapeSVG(o){
   if(o.type === 'group')
     return `<g class="o" data-id="${o.id}" transform="${groupTransform(o)}">${o.children.map(shapeSVG).join('')}</g>`;
-  const b = box(o), a = `class="o" data-id="${o.id}" fill="${fillHex(o.fill)}"`, t = rotAttr(o);
+  const b = box(o), a = `class="o" data-id="${o.id}" fill="${fillPaint(o.fill)}"`, t = rotAttr(o);
   switch(o.type){
     case 'ellipse':
       return `<ellipse ${a}${t} cx="${b.x+b.w/2}" cy="${b.y+b.h/2}" rx="${b.w/2}" ry="${b.h/2}"/>`;
@@ -671,6 +713,7 @@ function renderSVG(){
   svgEl.setAttribute('viewBox', `0 0 ${doc.w} ${doc.h}`);
   $('#board').style.setProperty('--ar', `${doc.w}/${doc.h}`);
   svgEl.innerHTML =
+    `<defs>${gradDefsSVG()}</defs>` +
     `<rect id="bg" width="${doc.w}" height="${doc.h}" fill="${bg().hex}"/>` +
     `<g id="gridlines" fill="#ff2e88" fill-opacity=".16">${gridSVG()}</g>` +
     doc.objects.map(shapeSVG).join('') +
@@ -827,13 +870,15 @@ function groupPanel(o){
 }
 function objPanel(o){
   if(o.type === 'group') return groupPanel(o);
-  const sw = doc.palette.map(s => `
-    <button class="sw ${fillSlot(o.fill)===s.id?'on':''}" data-slot="${s.id}">
+  const grad = isGrad(o.fill), g = grad ? parseGrad(o.fill) : null;
+  const swRows = (activeId, attr) => doc.palette.map(s => `
+    <button class="sw ${activeId===s.id?'on':''}" data-${attr}="${s.id}">
       <span class="ch" style="background:${s.hex}"></span><span class="nm">${s.id}</span>
     </button>`).join('');
+  const sw = swRows(fillSlot(o.fill), 'slot');
   const pct = fillPct(o.fill);
   const tints = [100,70,40,15].map(t => `
-    <button class="tint ${pct===t?'on':''}" data-tint="${t}"
+    <button class="tint ${!grad && pct===t?'on':''}" data-tint="${t}"
       style="background:${fillHex(fillSlot(o.fill)+(t<100?'@'+t:''))}"><span>${t}</span></button>`).join('');
 
   const geom = o.type === 'text'
@@ -883,15 +928,29 @@ function objPanel(o){
   ${geom}
   <div class="sec">
     ${secHead('Fill', 'tints mix toward the <b>background</b> (the first swatch) and stay bound to the slot',
-      `<em>${o.fill}</em><button id="forkSw">+ NEW</button>`)}
-    ${sw}
-    <div class="r" style="margin-top:8px">
-      <label class="ch" style="background:${slotHex(fillSlot(o.fill))};cursor:pointer;width:15px;height:15px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)">
-        <input type="color" value="${slotHex(fillSlot(o.fill))}" data-edit="${fillSlot(o.fill)}">
-      </label>
-      <span class="tip" style="margin:0">edit <b>${fillSlot(o.fill)}</b> — used by ${allObjects().filter(x => fillSlot(x.fill) === fillSlot(o.fill)).length}</span>
+      grad ? '<em>gradient</em>' : `<em>${o.fill}</em><button id="forkSw">+ NEW</button>`)}
+    <div class="r" style="margin-bottom:8px">
+      <button class="alb ${grad?'':'on'}" id="fillSolid" style="width:auto;padding:5px 10px">SOLID</button>
+      <button class="alb ${grad?'on':''}" id="fillGrad" style="width:auto;padding:5px 10px">GRADIENT</button>
     </div>
-    <div class="tints">${tints}</div>
+    ${grad ? `
+      <div class="r"><span class="lb">FROM</span></div>
+      ${swRows(g.a, 'grada')}
+      <div class="r" style="margin-top:6px"><span class="lb">TO</span></div>
+      ${swRows(g.b, 'gradb')}
+      ${num('ANGLE','gang',g.ang)}
+      <div class="r" style="margin-top:7px"><span class="lb">OFFSET</span><input class="n" data-k="goff" value="${g.off}"><span class="u">%</span>
+        <span class="lb" style="width:40px;text-align:right">LENGTH</span><input class="n" data-k="glen" value="${g.len}"><span class="u">%</span></div>
+    ` : `
+      ${sw}
+      <div class="r" style="margin-top:8px">
+        <label class="ch" style="background:${slotHex(fillSlot(o.fill))};cursor:pointer;width:15px;height:15px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)">
+          <input type="color" value="${slotHex(fillSlot(o.fill))}" data-edit="${fillSlot(o.fill)}">
+        </label>
+        <span class="tip" style="margin:0">edit <b>${fillSlot(o.fill)}</b> — used by ${allObjects().filter(x => fillRefs(x.fill).includes(fillSlot(o.fill))).length}</span>
+      </div>
+      <div class="tints">${tints}</div>
+    `}
   </div>`;
 }
 
@@ -901,7 +960,7 @@ function docPanel(){
   if(tab === 'layers'){
     const row = (o, parent) => `
       <button class="ly ${sel.includes(o.id)?'on':''}" data-pick="${o.id}"${parent!=null ? ` data-parent="${parent}" style="padding-left:26px"` : ''}>
-        <span class="ch" style="${o.type==='group' ? 'background:transparent;box-shadow:inset 0 0 0 1px var(--hair)' : `background:${fillHex(o.fill)}`}"></span>
+        <span class="ch" style="${o.type==='group' ? 'background:transparent;box-shadow:inset 0 0 0 1px var(--hair)' : `background:${fillCSS(o.fill)}`}"></span>
         <span class="t">${o.type === 'group' ? 'group' : o.type === 'text' ? esc(o.str.split('\n')[0].slice(0,18)) : o.type}</span>
         <span class="x">#${o.id}</span>
       </button>`;
@@ -913,7 +972,7 @@ function docPanel(){
     </div>`;
   }
 
-  const used = id => allObjects().filter(o => fillSlot(o.fill) === id).length;
+  const used = id => allObjects().filter(o => fillRefs(o.fill).includes(id)).length;
   const sw = doc.palette.map(s => `
     <div class="sw">
       <label class="ch" style="background:${s.hex};cursor:pointer">
@@ -996,6 +1055,11 @@ function fieldGet(k){
   if(DOCK[k]) return doc[DOCK[k]] ?? 0;
   const o = cur();
   if(!o) return 0;
+  if(k === 'gang' || k === 'goff' || k === 'glen'){
+    if(!isGrad(o.fill)) return 0;
+    const g = parseGrad(o.fill);
+    return k === 'gang' ? g.ang : k === 'goff' ? g.off : g.len;
+  }
   return Math.round((o[k] ?? 0) * 100) / 100;
 }
 function fieldSet(k, v){
@@ -1006,6 +1070,15 @@ function fieldSet(k, v){
   }
   const o = cur();
   if(!o) return;
+  if(k === 'gang' || k === 'goff' || k === 'glen'){
+    if(isGrad(o.fill)){
+      const g = parseGrad(o.fill);
+      o.fill = k === 'gang' ? mkGrad(v, g.a, g.b, g.off, g.len)
+        : k === 'goff' ? mkGrad(g.ang, g.a, g.b, v, g.len)
+        : mkGrad(g.ang, g.a, g.b, g.off, v);
+    }
+    dirty = true; return;
+  }
   if(k === 'x' || k === 'y')      o[k] = Math.round(v*100)/100;
   else if(k === 'w' || k === 'h') o[k] = Math.max(1, Math.round(v));
   else if(k === 'size')           o.size = Math.max(1, Math.round(v));
@@ -1066,6 +1139,26 @@ function wire(){
   $$('#panel .tint').forEach(b => b.onclick = () => {
     commit(); const t = +b.dataset.tint;
     o.fill = fillSlot(o.fill) + (t < 100 ? '@' + t : ''); touch();
+  });
+  const fillSolid = $('#fillSolid');
+  if(fillSolid) fillSolid.onclick = () => {
+    if(!isGrad(o.fill)) return;                        // already solid — nothing to do
+    commit(); o.grad = o.fill;                          // remember it in case gradient mode comes back
+    o.fill = parseGrad(o.fill).a; touch();
+  };
+  const fillGrad = $('#fillGrad');
+  if(fillGrad) fillGrad.onclick = () => {
+    if(isGrad(o.fill)) return;                          // already gradient — don't clobber its params
+    commit();
+    if(o.grad) o.fill = o.grad;                         // restore whatever was last set here
+    else { const a = fillSlot(o.fill), b = (doc.palette.find(p => p.id !== a) || {}).id || a; o.fill = mkGrad(90, a, b); }
+    touch();
+  };
+  $$('#panel .sw[data-grada]').forEach(b => b.onclick = () => {
+    commit(); const g = parseGrad(o.fill); o.fill = mkGrad(g.ang, b.dataset.grada, g.b, g.off, g.len); touch();
+  });
+  $$('#panel .sw[data-gradb]').forEach(b => b.onclick = () => {
+    commit(); const g = parseGrad(o.fill); o.fill = mkGrad(g.ang, g.a, b.dataset.gradb, g.off, g.len); touch();
   });
   $$('#panel .f[data-font]').forEach(b => b.onclick = () => { commit(); o.font = b.dataset.font; touch(); });
   $$('#panel .alb[data-al]').forEach(b => b.onclick = () => { commit(); o.al = b.dataset.al; touch(); });
@@ -1487,7 +1580,7 @@ function ungroupSel(){
    fallback for when the system clipboard is unreadable (offline file://). */
 let clip = null;
 function clipData(objs){
-  const ids = new Set(objs.map(o => fillSlot(o.fill)));
+  const ids = new Set(objs.flatMap(o => fillRefs(o.fill)));
   return { plakt:'clip', v:1,
     objects: objs.map(o => o.type === 'group' ? {...o, children: o.children.map(c => ({...c}))} : {...o}),
     palette: doc.palette.filter(p => ids.has(p.id)).map(p => ({...p})) };
@@ -1600,9 +1693,16 @@ function renameSwatch(oldId, raw){
   commit();
   doc.palette.find(p => p.id === oldId).id = id;
   allObjects().forEach(o => {                       // keep every reference pointing home
-    if(fillSlot(o.fill) === oldId){
+    if(isGrad(o.fill)){
+      const g = parseGrad(o.fill);
+      if(g.a === oldId || g.b === oldId) o.fill = mkGrad(g.ang, g.a === oldId ? id : g.a, g.b === oldId ? id : g.b, g.off, g.len);
+    } else if(fillSlot(o.fill) === oldId){
       const p = fillPct(o.fill);
       o.fill = id + (p < 100 ? '@' + p : '');
+    }
+    if(o.grad && isGrad(o.grad)){                    // ...including a gradient parked while in solid mode
+      const g = parseGrad(o.grad);
+      if(g.a === oldId || g.b === oldId) o.grad = mkGrad(g.ang, g.a === oldId ? id : g.a, g.b === oldId ? id : g.b, g.off, g.len);
     }
   });
   touch();
@@ -1610,7 +1710,7 @@ function renameSwatch(oldId, raw){
 function delSwatch(id){
   if(doc.palette[0] && doc.palette[0].id === id) return flash('the first swatch is the background — it can’t be removed');
   if(doc.palette.length <= 2) return flash('keep at least two swatches');
-  if(allObjects().some(o => fillSlot(o.fill) === id)) return flash(id + ' is in use — recolour those objects first');
+  if(allObjects().some(o => fillRefs(o.fill).includes(id))) return flash(id + ' is in use — recolour those objects first');
   commit();
   doc.palette = doc.palette.filter(p => p.id !== id);
   touch();
