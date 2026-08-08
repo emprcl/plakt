@@ -183,6 +183,7 @@ input[type=color]{position:absolute;opacity:0;width:1px;height:1px;pointer-event
 .ly{display:flex;align-items:center;gap:8px;padding:4px 6px;margin:0 -6px;width:calc(100% + 12px);color:var(--dim)}
 .ly:hover{background:var(--chrome2)}
 .ly.on{background:var(--chrome2);color:var(--ink)}
+.ly.dragover{box-shadow:inset 0 -2px 0 var(--ink)}
 .ly .ch{width:9px;height:9px;flex:none}
 .ly .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:.08em}
 .ly .x{margin-left:auto;color:var(--faint);font-size:9px}
@@ -620,16 +621,29 @@ function groupTransform(o){
   return `${rot}translate(${o.x} ${o.y}) scale(${sx} ${sy}) translate(${-cb.x} ${-cb.y})`;
 }
 
+/* opacity (0-100, default 100 = fully opaque) is orthogonal to fill/stroke
+   and applies to every object type, group included — omitted entirely when
+   at its default so a fresh document's markup stays unchanged */
+const opAttr = o => (o.op != null && o.op < 100) ? ` opacity="${Math.max(0,o.op)/100}"` : '';
+/* a dashed/dotted border or line stroke, scaled to its own width so it
+   reads consistently whether the stroke is thin or thick */
+function dashAttr(o){
+  if(!o.dash) return '';
+  const w = o.sw || 2;
+  if(o.dash === 'dotted') return ` stroke-dasharray="${w*0.01} ${w*2.2}" stroke-linecap="round"`;
+  return ` stroke-dasharray="${w*3} ${w*2}"`;
+}
+
 function shapeSVG(o){
   if(o.type === 'group')
-    return `<g class="o" data-id="${o.id}" transform="${groupTransform(o)}">${o.children.map(shapeSVG).join('')}</g>`;
+    return `<g class="o" data-id="${o.id}"${opAttr(o)} transform="${groupTransform(o)}">${o.children.map(shapeSVG).join('')}</g>`;
   const b = box(o), t = rotAttr(o);
   if(o.type === 'line')                // a stroke, not a fill — no palette-fill attribute at all
-    return `<line class="o" data-id="${o.id}"${t} x1="${b.x}" y1="${b.y}" x2="${b.x+b.w}" y2="${b.y+b.h}" stroke="${fillPaint(o.fill)}" stroke-width="${o.sw||2}" stroke-linecap="round" pointer-events="stroke"/>`;
+    return `<line class="o" data-id="${o.id}"${t}${opAttr(o)} x1="${b.x}" y1="${b.y}" x2="${b.x+b.w}" y2="${b.y+b.h}" stroke="${fillPaint(o.fill)}" stroke-width="${o.sw||2}" stroke-linecap="round"${dashAttr(o)} pointer-events="stroke"/>`;
   if(o.type === 'image')
-    return `<image class="o" data-id="${o.id}"${t} href="${esc(o.src)}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" preserveAspectRatio="none"/>`;
-  const border = hasStroke(o) ? ` stroke="${fillHex(o.stroke)}" stroke-width="${o.sw||2}"` : '';
-  const a = `class="o" data-id="${o.id}" fill="${fillPaint(o.fill)}"${border}`;
+    return `<image class="o" data-id="${o.id}"${t}${opAttr(o)} href="${esc(o.src)}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" preserveAspectRatio="none"/>`;
+  const border = hasStroke(o) ? ` stroke="${fillHex(o.stroke)}" stroke-width="${o.sw||2}"${dashAttr(o)}` : '';
+  const a = `class="o" data-id="${o.id}" fill="${fillPaint(o.fill)}"${border}${opAttr(o)}`;
   switch(o.type){
     case 'ellipse':
       return `<ellipse ${a}${t} cx="${b.x+b.w/2}" cy="${b.y+b.h/2}" rx="${b.w/2}" ry="${b.h/2}"/>`;
@@ -644,7 +658,7 @@ function shapeSVG(o){
       return `<text ${a}${t} x="${x}" y="${o.y}" text-anchor="${anchor}" font-family="${esc(cssFont(o.font))}" font-weight="${o.wt||400}" font-size="${o.size}" letter-spacing="${o.tr||0}">${sp}</text>`;
     }
     default:
-      return `<rect ${a}${t} x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}"/>`;
+      return `<rect ${a}${t} x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="${o.rx||0}"/>`;
   }
 }
 
@@ -886,6 +900,7 @@ function groupPanel(o){
     ${num('W','w',Math.round(o.w))}
     ${num('H','h',Math.round(o.h))}
     ${num('ROT','rot',o.rot||0)}
+    ${num('OPACITY','op',o.op??100)}
   </div>
   <div class="sec">
     ${secHead('Group', `${o.children.length} object${o.children.length===1?'':'s'} inside · double-click one to edit it directly`)}
@@ -906,6 +921,7 @@ function imagePanel(o){
     ${num('W','w',Math.round(o.w))}
     ${num('H','h',Math.round(o.h))}
     ${num('ROT','rot',o.rot||0)}
+    ${num('OPACITY','op',o.op??100)}
   </div>
   <div class="sec">
     ${secHead('Image', 'embedded as a data URI so the file stays self-contained — a large photo will bloat it')}
@@ -924,6 +940,11 @@ function objPanel(o){
     <button class="sw ${activeId===s.id?'on':''}" data-${attr}="${s.id}">
       <span class="ch" style="background:${s.hex}"></span><span class="nm">${s.id}</span>
     </button>`).join('');
+  const dashRow = o => `<div class="r" style="margin-top:6px">
+    <button class="alb ${!o.dash?'on':''}" data-dash="" style="width:auto;padding:5px 8px">SOLID</button>
+    <button class="alb ${o.dash==='dashed'?'on':''}" data-dash="dashed" style="width:auto;padding:5px 8px">DASHED</button>
+    <button class="alb ${o.dash==='dotted'?'on':''}" data-dash="dotted" style="width:auto;padding:5px 8px">DOTTED</button>
+  </div>`;
   const sw = swRows(fillSlot(o.fill), 'slot');
   const pct = fillPct(o.fill);
   const tints = [100,70,40,15].map(t => `
@@ -944,6 +965,7 @@ function objPanel(o){
            <span class="lb" style="width:26px;text-align:right">TRK</span><input class="n" data-k="tr" value="${o.tr||0}"></div>
          <div class="r"><span class="lb">WGHT</span><input class="n" data-k="wt" value="${o.wt||400}">
            <span class="lb" style="width:26px;text-align:right">ROT</span><input class="n" data-k="rot" value="${o.rot||0}"></div>
+         <div class="r"><span class="lb">OPACITY</span><input class="n" data-k="op" value="${o.op??100}"><span class="u">%</span></div>
        </div>
        <div class="sec">${secHead('Typeface',
          "Google faces are fetched over the network — the file stops being self-contained and they won't rasterise into a PNG offline")}<div class="fs">
@@ -966,6 +988,8 @@ function objPanel(o){
          ${num('W','w',Math.round(o.w))}
          ${num('H','h',Math.round(o.h))}
          ${num('ROT','rot',o.rot||0)}
+         ${o.type === 'rect' ? num('RADIUS','rx',o.rx||0) : ''}
+         ${num('OPACITY','op',o.op??100)}
        </div>`;
 
   return `
@@ -984,7 +1008,7 @@ function objPanel(o){
       <button class="alb ${grad?'':'on'}" id="fillSolid" style="width:auto;padding:5px 10px">SOLID</button>
       <button class="alb ${grad?'on':''}" id="fillGrad" style="width:auto;padding:5px 10px">GRADIENT</button>
     </div>
-    ${isLine ? num('WEIGHT','sw',o.sw||2) : ''}
+    ${isLine ? num('WEIGHT','sw',o.sw||2) + dashRow(o) : ''}
     ${grad ? `
       <div class="r"><span class="lb">FROM</span></div>
       ${swRows(g.a, 'grada')}
@@ -1014,6 +1038,7 @@ function objPanel(o){
     ${hasStroke(o) ? `
       ${swRows(fillSlot(o.stroke), 'strokeslot')}
       ${num('WEIGHT','sw',o.sw||2)}
+      ${dashRow(o)}
     ` : ''}
   </div>` : ''}`;
 }
@@ -1023,7 +1048,7 @@ let tab = 'artboard';
 function docPanel(){
   if(tab === 'layers'){
     const row = (o, parent) => `
-      <button class="ly ${sel.includes(o.id)?'on':''}" data-pick="${o.id}"${parent!=null ? ` data-parent="${parent}" style="padding-left:26px"` : ''}>
+      <button class="ly ${sel.includes(o.id)?'on':''}" draggable="true" data-pick="${o.id}"${parent!=null ? ` data-parent="${parent}" style="padding-left:26px"` : ''}>
         <span class="ch" style="${o.type==='group'||o.type==='image' ? 'background:transparent;box-shadow:inset 0 0 0 1px var(--hair)' : `background:${fillCSS(o.fill)}`}"></span>
         <span class="t">${o.type === 'group' ? 'group' : o.type === 'text' ? esc(o.str.split('\n')[0].slice(0,18)) : o.type}</span>
         <span class="x">#${o.id}</span>
@@ -1032,7 +1057,7 @@ function docPanel(){
       row(o, null) + (o.type === 'group' ? [...o.children].reverse().map(c => row(c, o.id)).join('') : '')
     ).join('') || '<div class="tip" style="margin:0">nothing on the artboard yet</div>';
     return `<div class="sec" style="border:0">
-      ${secHead('Stack', 'topmost first · <b>[</b> and <b>]</b> reorder the selection · <b>⇧</b> click to add', '<em>top first</em>')}${layers}
+      ${secHead('Stack', 'topmost first · drag to reorder · <b>[</b> and <b>]</b> reorder the selection · <b>⇧</b> click to add', '<em>top first</em>')}${layers}
     </div>`;
   }
 
@@ -1144,6 +1169,7 @@ function fieldGet(k){
     const g = parseGrad(o.fill);
     return k === 'gang' ? g.ang : k === 'goff' ? g.off : g.len;
   }
+  if(k === 'op') return o.op ?? 100;
   return Math.round((o[k] ?? 0) * 100) / 100;
 }
 function fieldSet(k, v){
@@ -1166,6 +1192,8 @@ function fieldSet(k, v){
   if(k === 'x' || k === 'y')      o[k] = Math.round(v*100)/100;
   else if(k === 'w' || k === 'h') o[k] = Math.max(1, Math.round(v));
   else if(k === 'sw')             o.sw  = Math.max(1, Math.round(v));
+  else if(k === 'op')             o.op  = Math.max(0, Math.min(100, Math.round(v)));
+  else if(k === 'rx')             o.rx  = Math.max(0, Math.round(v));
   else if(k === 'size')           o.size = Math.max(1, Math.round(v));
   else if(k === 'lh')             o.lh   = Math.max(0, Math.round(v));   /* 0 = auto */
   else o[k] = Math.round(v);                                            /* rot, wt, tr */
@@ -1264,6 +1292,9 @@ function wire(){
   $$('#panel .sw[data-strokeslot]').forEach(b => b.onclick = () => {
     commit(); o.stroke = b.dataset.strokeslot; touch();
   });
+  $$('#panel [data-dash]').forEach(b => b.onclick = () => {
+    commit(); o.dash = b.dataset.dash || undefined; touch();
+  });
   $$('#panel .f[data-font]').forEach(b => b.onclick = () => { commit(); o.font = b.dataset.font; touch(); });
   $$('#panel .alb[data-al]').forEach(b => b.onclick = () => { commit(); o.al = b.dataset.al; touch(); });
   $$('#panel input[data-edit]').forEach(i => {
@@ -1279,6 +1310,42 @@ function wire(){
       entered = parent; sel = [id];
     }
     tab = 'selection'; full();
+  });
+  /* drag a layer row onto another to reorder — restricted to the same list
+     (top-level siblings, or one group's children) since moving an object
+     into/out of a group is a membership change, not a plain reorder */
+  let dragLayer = null;
+  $$('#panel .ly[data-pick]').forEach(row => {
+    row.addEventListener('dragstart', () => {
+      dragLayer = { id: +row.dataset.pick, parent: row.dataset.parent ? +row.dataset.parent : null };
+    });
+    row.addEventListener('dragover', e => {
+      if(!dragLayer) return;
+      const parent = row.dataset.parent ? +row.dataset.parent : null;
+      if(parent !== dragLayer.parent || +row.dataset.pick === dragLayer.id) return;
+      e.preventDefault();
+      row.classList.add('dragover');
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('dragover'));
+    row.addEventListener('drop', e => {
+      e.preventDefault();
+      row.classList.remove('dragover');
+      if(!dragLayer) return;
+      const targetId = +row.dataset.pick, parent = row.dataset.parent ? +row.dataset.parent : null;
+      const src = dragLayer; dragLayer = null;
+      if(parent !== src.parent || targetId === src.id) return;
+      commit();
+      const list = src.parent !== null ? doc.objects.find(o => o.id === src.parent).children : doc.objects;
+      const from = list.findIndex(o => o.id === src.id), to = list.findIndex(o => o.id === targetId);
+      if(from < 0 || to < 0) return;
+      const [item] = list.splice(from, 1);
+      list.splice(to, 0, item);
+      touch();
+    });
+    row.addEventListener('dragend', () => {
+      dragLayer = null;
+      $$('#panel .ly').forEach(r => r.classList.remove('dragover'));
+    });
   });
   const msGroup = $('#msGroup'); if(msGroup) msGroup.onclick = groupSel;
   const msDup = $('#msDup'); if(msDup) msDup.onclick = dup;
@@ -1692,6 +1759,7 @@ function bakeChild(c, g){
   const rot = (((c.rot||0) + g.rot) % 360 + 360) % 360;
   const baked = { ...c, rot, w: c.w*s, h: c.h*s };
   if(c.sw) baked.sw = c.sw*s;   /* a line's own stroke, or a shape's optional border */
+  if(c.rx) baked.rx = c.rx*s;   /* a rect's corner radius */
   if(c.type === 'text'){
     baked.x = pv.x; baked.y = pv.y; baked.size = c.size*s;
     if(c.lh > 0) baked.lh = c.lh*s;
