@@ -87,6 +87,11 @@ body.panning .o{cursor:grabbing}
 
 .cr{transition:opacity var(--t),transform var(--t)}
 body:not(.edit) .cr{opacity:0;pointer-events:none}
+#editBtn{position:fixed;top:14px;right:14px;background:var(--chrome);color:var(--ink);
+  border:1px solid var(--hair);padding:8px 16px;letter-spacing:.14em;font-size:11px;
+  transition:opacity var(--t),background 90ms}
+#editBtn:hover{background:var(--chrome2)}
+body.edit #editBtn{opacity:0;pointer-events:none}
 #rail{position:fixed;left:0;top:0;bottom:var(--stat);width:var(--rail);background:var(--chrome);
   border-right:1px solid var(--hair);padding:13px 0;display:flex;flex-direction:column;transform:translateX(-12px)}
 body.edit #rail{transform:none}
@@ -297,6 +302,8 @@ body.edit #status{transform:none}
     <div class="rul" id="rulL" title="drag right for a vertical guide"></div>
   </div>
 </main>
+
+<button id="editBtn" title="Enter edit mode (E)">EDIT</button>
 
 <aside id="rail" class="cr">
   <div class="rh">Draw</div>
@@ -2374,6 +2381,7 @@ $$('.tl[data-add]').forEach(b => b.onclick = () => add(b.dataset.add));
 $('#t-image').onclick = () => $('#imgInput').click();
 $('#imgInput').onchange = () => { addImage($('#imgInput').files[0]); $('#imgInput').value = ''; };
 $('#t-view').onclick = () => mode(false);
+$('#editBtn').onclick = () => mode(true);
 $('#t-undo').onclick = undo;
 $('#t-snap').onclick = () => { snap = !snap; syncSnapUI(); panel(); };
 $('#stage').addEventListener('dblclick', () => { if(!document.body.classList.contains('edit')) mode(true); });
