@@ -6,6 +6,8 @@ Plakt is a graphic design tool that lives entirely inside a single HTML file. Th
 
 _Feel free to [open an issue](https://github.com/emprcl/plakt/issues/new)._
 
+![plakt screenshot](docs/screenshot.png)
+
 ## Getting started
 
 Download `plakt.html` (or clone this repository) and open the file in a modern browser. Press `E`, or double click the canvas, to enter edit mode, then start drawing.
