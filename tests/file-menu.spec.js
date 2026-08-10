@@ -73,40 +73,11 @@ test.describe('file menu', () => {
     expect(clip).toContain('<ellipse');
   });
 
-  test('Replace from JSON swaps in a whole new document', async ({ page }) => {
-    await addShape(page, 'r');
-    const replacement = JSON.stringify({
-      name: 'replaced-doc', w: 500, h: 500, cols: 1, rows: 1, gap: 0, margin: 0,
-      webfonts: [], guides: { v: [], h: [] },
-      palette: [{ id: 'BG', hex: '#fff' }, { id: 'INK', hex: '#000' }],
-      objects: [{ id: 1, type: 'ellipse', x: 5, y: 5, w: 20, h: 20, rot: 0, fill: 'INK' }],
-    });
-    const tmpPath = path.join(os.tmpdir(), 'plakt-replace-test.json');
-    fs.writeFileSync(tmpPath, replacement);
-    try {
-      await page.locator('#jsonInput').setInputFiles(tmpPath);
-      await page.waitForFunction(() => doc.name === 'replaced-doc');
-      const d = await getDoc(page);
-      expect(d.objects).toHaveLength(1);
-      expect(d.objects[0].type).toBe('ellipse');
-    } finally {
-      fs.unlinkSync(tmpPath);
-    }
-  });
-
-  test('Replace from JSON rejects a file that is not a plakt document, leaving the doc untouched', async ({ page }) => {
-    await addShape(page, 'r');
-    const before = await getDoc(page);
-    const tmpPath = path.join(os.tmpdir(), 'plakt-bad.json');
-    fs.writeFileSync(tmpPath, '{"not":"a plakt doc"}');
-    try {
-      await page.locator('#jsonInput').setInputFiles(tmpPath);
-      await page.waitForFunction(() => document.querySelector('#msg').textContent.includes("doesn't look like"));
-      const after = await getDoc(page);
-      expect(after.objects).toEqual(before.objects);
-    } finally {
-      fs.unlinkSync(tmpPath);
-    }
+  test('Replace from JSON opens a dialog rather than a file picker', async ({ page }) => {
+    await page.click('#fileMenuBtn');
+    await page.click('#fileMenu [data-fm="replace"]');
+    await expect(page.locator('#jsonk')).toHaveClass(/open/);
+    expect(await page.evaluate(() => document.activeElement.id)).toBe('jsonin'); // ready to paste
   });
 
   test('New resets to a blank document and clears the save handle, after confirming', async ({ page }) => {

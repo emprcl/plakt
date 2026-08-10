@@ -58,7 +58,11 @@ body.edit #stage{padding:0 var(--pan) var(--stat) var(--rail)}
   box-shadow:0 1px 2px rgba(0,0,0,.22),0 18px 52px rgba(0,0,0,.3);transition:height var(--t);
   transform:translate(var(--panx,0px),var(--pany,0px)) scale(var(--zoom,1))}
 body.edit #board{height:min(78vh,820px)}
-#board svg{display:block;width:100%;height:100%;user-select:none;touch-action:none}
+/* an SVG root clips to its viewBox by default, which would cut the
+   selection outline and handles off at the artboard edge — the art is
+   clipped explicitly instead (see #artboard-clip in renderSVG) so the
+   editor overlay can hang over the sides */
+#board svg{display:block;width:100%;height:100%;user-select:none;touch-action:none;overflow:visible}
 #guides{opacity:0;pointer-events:none;transition:opacity var(--t)}
 body.edit.grid #guides{opacity:1;pointer-events:auto}
 /* Editor chrome drawn over the artboard — guides, selection, handles,
@@ -263,6 +267,19 @@ body.edit #status{transform:none}
 .c .k{margin-left:auto;color:var(--faint);font-size:10px}
 .ce{padding:14px 15px;color:var(--faint)}
 
+/* same overlay + card as the command palette, with a heading and a
+   footer of actions instead of a filter and a list */
+#jsonk{position:fixed;inset:0;background:rgba(8,8,8,.45);display:none;justify-content:center;
+  align-items:flex-start;padding-top:12vh;z-index:50}
+#jsonk.open{display:flex}
+.mh{padding:13px 15px;border-bottom:1px solid var(--hair);color:var(--dim);
+  letter-spacing:.16em;font-size:10px;text-transform:uppercase}
+#jsonin{display:block;width:100%;height:230px;background:none;border:0;padding:13px 15px;
+  color:var(--ink);line-height:1.6;resize:none;font:inherit}
+#jsonin:focus{outline:none}
+#jsonin::placeholder{color:var(--faint)}
+.mf{display:flex;align-items:center;gap:8px;padding:11px 15px;border-top:1px solid var(--hair)}
+
 ::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-thumb{background:#2e2e2c}
 ::-webkit-scrollbar-track{background:transparent}
@@ -399,6 +416,19 @@ body.edit #status{transform:none}
   </div>
 </div>
 
+<div id="jsonk">
+  <div class="cb">
+    <div class="mh">Replace from JSON</div>
+    <textarea id="jsonin" spellcheck="false" autocomplete="off"
+      placeholder="Paste a plakt document's JSON here — the same thing Copy JSON puts on your clipboard"></textarea>
+    <div class="mf">
+      <button class="alb" id="jsonPick" style="width:auto;padding:6px 10px">OPEN A .JSON FILE…</button>
+      <button class="alb" id="jsonCancel" style="width:auto;padding:6px 10px;margin-left:auto">CANCEL</button>
+      <button class="alb on" id="jsonOk" style="width:auto;padding:6px 10px">REPLACE</button>
+    </div>
+  </div>
+</div>
+
 <script id="app">
 "use strict";
 /* ════════════════════════════════════════════════════════════════════
@@ -529,17 +559,33 @@ const SNAPTOL = () => {
    (resp. top/centre/bottom) because an edge shares one coordinate across
    both corners. Once rotated, the four corners no longer share an axis,
    so each is tested on its own — this is what makes a rotated shape snap
-   on its actual corners instead of its invisible unrotated bounding box. */
+   on its actual corners instead of its invisible unrotated bounding box.
+   Text reaches with two boxes rather than one: its selection box, and
+   the box its glyphs actually occupy. Those coincide only for left-
+   aligned copy that fills its frame; the rest of the time the edge you
+   are trying to line up against a guide is the one you can see, not the
+   frame edge hiding somewhere out past the end of a centred line. */
 function snapOffsets(o, w, h){
-  if(!o || !o.rot) return { vx:[0, w/2, w], hy:[0, h/2, h] };
-  const b = localBox(o), p = pivot(o), rad = o.rot*Math.PI/180;
-  const cos = Math.cos(rad), sin = Math.sin(rad);
-  const pts = [[b.x,b.y],[b.x+b.w,b.y],[b.x+b.w,b.y+b.h],[b.x,b.y+b.h],[b.x+b.w/2,b.y+b.h/2]];
+  if(!o) return { vx:[0, w/2, w], hy:[0, h/2, h] };
+  const boxes = [localBox(o)];
+  if(o.type === 'text') boxes.push(textInk(o));
   const vx = [], hy = [];
-  pts.forEach(([px,py]) => {
-    const dx = px - p.x, dy = py - p.y;
-    vx.push((p.x + dx*cos - dy*sin) - o.x);
-    hy.push((p.y + dx*sin + dy*cos) - o.y);
+  if(!o.rot){
+    boxes.forEach(b => {
+      vx.push(b.x - o.x, b.x + b.w/2 - o.x, b.x + b.w - o.x);
+      hy.push(b.y - o.y, b.y + b.h/2 - o.y, b.y + b.h - o.y);
+    });
+    return { vx, hy };
+  }
+  const p = pivot(o), rad = o.rot*Math.PI/180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  boxes.forEach(b => {
+    [[b.x,b.y],[b.x+b.w,b.y],[b.x+b.w,b.y+b.h],[b.x,b.y+b.h],[b.x+b.w/2,b.y+b.h/2]]
+      .forEach(([px,py]) => {
+        const dx = px - p.x, dy = py - p.y;
+        vx.push((p.x + dx*cos - dy*sin) - o.x);
+        hy.push((p.y + dx*sin + dy*cos) - o.y);
+      });
   });
   return { vx, hy };
 }
@@ -798,14 +844,12 @@ function textAnchor(o){
   const [anchor, f] = ALIGN[o.al || 'l'];
   return { anchor, x: o.x + o.w * f };
 }
-/* wrapLines() only ever breaks between words — a single word wider than
-   o.w has nowhere to break, so it renders past the box edge. textBox()
-   is what drives the selection outline, resize handles, click hit-area
-   and alignment/snapping math, so it needs to grow to actually enclose
-   that overflow rather than staying clamped to the nominal o.w — in
-   whichever direction the current alignment overflows into (centered
-   text overflows both ways, right-aligned overflows to the left). */
-function textBox(o){
+/* The box the glyphs actually paint into — measured off the laid-out
+   lines, so it tracks the alignment: a centred or right-aligned line
+   sits nowhere near o.x, and a short line in a wide frame stops well
+   short of o.x + o.w. This is what you see on the artboard, so it's what
+   snapping lines up (see snapOffsets); the frame is a separate thing. */
+function textInk(o){
   const lines = wrapLines(o), lh = LH(o), asc = o.size * .78;
   const {anchor, x: ax} = textAnchor(o);
   MC.font = `${o.wt||400} ${o.size}px ${cssFont(o.font)}`;
@@ -815,14 +859,25 @@ function textBox(o){
     const start = anchor === 'start' ? ax : anchor === 'end' ? ax - w : ax - w/2;
     return [start, start + w];
   });
-  const x0 = Math.min(o.x, ...spans.map(s => s[0]));
-  const x1 = Math.max(o.x + o.w, ...spans.map(s => s[1]));
+  const x0 = Math.min(...spans.map(s => s[0])), x1 = Math.max(...spans.map(s => s[1]));
   return {
     x: x0,
     y: o.y - asc,
     w: x1 - x0,
     h: asc + lh * (lines.length - 1) + o.size * .26
   };
+}
+/* What you grab: the ink and the frame together. wrapLines() only ever
+   breaks between words — a single word wider than o.w has nowhere to
+   break, so it renders past the frame edge; the selection outline,
+   resize handles and click hit-area all have to enclose that overflow
+   rather than stay clamped to the nominal o.w. Equally the frame itself
+   stays inside the box even when the copy is far narrower, because the
+   frame is what a resize drag is actually resizing. */
+function textBox(o){
+  const ink = textInk(o);
+  const x0 = Math.min(o.x, ink.x), x1 = Math.max(o.x + o.w, ink.x + ink.w);
+  return { x: x0, y: ink.y, w: x1 - x0, h: ink.h };
 }
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -848,11 +903,21 @@ function textHits(){
 function renderSVG(){
   svgEl.setAttribute('viewBox', `0 0 ${doc.w} ${doc.h}`);
   $('#board').style.setProperty('--ar', `${doc.w}/${doc.h}`);
+  /* The artboard is the page: artwork that hangs over its edge is cropped
+     there, in the editor exactly as in the export. The editor's own
+     overlay — guides, selection, handles, marquee — is not artwork and
+     must not be cropped with it, or a shape dragged half off the board
+     loses the very handles you need to drag it back. So the art rides
+     inside an explicit clip to the artboard rect, and the SVG itself is
+     allowed to overflow (see #doc-svg in the stylesheet) so the overlay,
+     which sits outside that clip, stays whole. */
   svgEl.innerHTML =
-    `<defs>${gradDefsSVG()}</defs>` +
-    `<rect id="bg" width="${doc.w}" height="${doc.h}" fill="${bg().hex}"/>` +
-    `<g id="gridlines" fill="#ff2e88" fill-opacity=".16">${gridSVG()}</g>` +
-    doc.objects.map(shapeSVG).join('') +
+    `<defs>${gradDefsSVG()}<clipPath id="artboard-clip"><rect width="${doc.w}" height="${doc.h}"/></clipPath></defs>` +
+    `<g id="art" clip-path="url(#artboard-clip)">` +
+      `<rect id="bg" width="${doc.w}" height="${doc.h}" fill="${bg().hex}"/>` +
+      `<g id="gridlines" fill="#ff2e88" fill-opacity=".16">${gridSVG()}</g>` +
+      doc.objects.map(shapeSVG).join('') +
+    `</g>` +
     `<g id="guides">${guidesSVG()}</g>` +
     `<g id="handles"></g>` +
     `<g id="marquee"></g>`;
@@ -1031,8 +1096,24 @@ function num(lb, k, v, w, u=''){
   const style = w ? ` style="width:${w}px"` : '';
   return `<div class="r"><span class="lb"${style}>${lb}</span><input class="n" data-k="${k}" value="${v}">${u?`<span class="u">${u}</span>`:''}</div>`;
 }
+/* The nine weights CSS actually defines. Type has no use for the values
+   in between — 437 is not a weight any face ships, it just renders as
+   whichever real one the browser rounds to — so this is a list to pick
+   from, not a number to scrub. */
+const WEIGHTS = [[100,'THIN'],[200,'EXTRA LIGHT'],[300,'LIGHT'],[400,'REGULAR'],
+  [500,'MEDIUM'],[600,'SEMI BOLD'],[700,'BOLD'],[800,'EXTRA BOLD'],[900,'BLACK']];
+function weightSelect(o){
+  const cur = o.wt || 400;
+  /* a document written before this was a list (or by hand) can hold
+     something off-list — keep it, in its sorted place, rather than
+     silently restyling the text the moment its panel is opened */
+  const opts = WEIGHTS.some(([v]) => v === cur) ? WEIGHTS
+    : [...WEIGHTS, [cur, 'CUSTOM']].sort((a,b) => a[0] - b[0]);
+  return `<select class="sel" data-wt>${opts.map(([v,n]) =>
+    `<option value="${v}"${v===cur?' selected':''}>${v} · ${n}</option>`).join('')}</select>`;
+}
 /* two numeric fields sharing one row — the same layout already used for
-   SIZE/LEAD, WIDTH/TRK, WGHT/ROT and COLS/ROWS, GAP/MARGIN, SNAP/SHOW: a
+   SIZE/LEAD, WIDTH/TRK, ROT/OPACITY and COLS/ROWS, GAP/MARGIN, SNAP/SHOW: a
    plain-width first label, a fixed-width right-aligned second label so
    the input columns line up down the panel. w2 is that second label's
    width in px — pick it to fit the label (26 for short ones like ROT,
@@ -1148,9 +1229,9 @@ function objPanel(o){
            <span class="lb" style="width:26px;text-align:right">LEAD</span><input class="n" data-k="lh" value="${LH(o)}"><span class="u">px</span></div>
          <div class="r"><span class="lb">WIDTH</span><input class="n" data-k="w" value="${Math.round(o.w)}"><span class="u">px</span>
            <span class="lb" style="width:26px;text-align:right">TRK</span><input class="n" data-k="tr" value="${o.tr||0}"></div>
-         <div class="r"><span class="lb">WGHT</span><input class="n" data-k="wt" value="${o.wt||400}">
-           <span class="lb" style="width:26px;text-align:right">ROT</span><input class="n" data-k="rot" value="${o.rot||0}"></div>
-         <div class="r"><span class="lb" style="width:50px">OPACITY</span><input class="n" data-k="op" value="${o.op??100}"><span class="u">%</span></div>
+         <div class="r"><span class="lb">ROT</span><input class="n" data-k="rot" value="${o.rot||0}">
+           <span class="lb" style="width:50px;text-align:right">OPACITY</span><input class="n" data-k="op" value="${o.op??100}"><span class="u">%</span></div>
+         <div class="r"><span class="lb">WGHT</span>${weightSelect(o)}</div>
        </div>
        <div class="sec">${secHead('Typeface',
          "Google faces are fetched over the network — the file stops being self-contained and they won't rasterise into a PNG offline")}<div class="fs">
@@ -1571,6 +1652,8 @@ function wire(){
   const ungroupBtn = $('#ungroupBtn'); if(ungroupBtn) ungroupBtn.onclick = ungroupSel;
   const blendSel = $('#panel [data-blend]');
   if(blendSel) blendSel.onchange = () => { commit(); o.blend = blendSel.value; touch(); };
+  const wtSel = $('#panel [data-wt]');
+  if(wtSel) wtSel.onchange = () => { commit(); o.wt = +wtSel.value; touch(); };
   const lockBtn = $('#panel [data-lock]');
   if(lockBtn) lockBtn.onclick = () => { commit(); o.lockAspect = !o.lockAspect; touch(); };
   $$('#panel [data-align]').forEach(b => b.onclick = () => alignSel(b.dataset.align));
@@ -2240,6 +2323,10 @@ function serialize(){
   c.querySelector('#cmdlist').innerHTML = '';
   c.querySelector('#cmdk').classList.remove('open');
   c.querySelector('#cmdin').setAttribute('value','');
+  /* a document someone else's JSON was pasted into shouldn't ship with
+     that JSON, or with the dialog hanging open on load */
+  c.querySelector('#jsonk').classList.remove('open');
+  c.querySelector('#jsonin').textContent = '';
   c.querySelector('title').textContent = doc.name;
   return '<!DOCTYPE html>\n' + c.outerHTML + '\n';
 }
@@ -2321,21 +2408,44 @@ async function saveAsCopy(){
    interpretation needed. An exported SVG is lossy in the other direction
    — rotation is baked into a transform, fills are resolved to flat hex,
    text is baked into <tspan>s — there's no reliable way back from that
-   into doc's model, so SVG stays an export-only format. */
-function replaceFromJSON(){ $('#jsonInput').click(); }
+   into doc's model, so SVG stays an export-only format.
+   Both ways in land in the same dialog: a file you pick is read into the
+   textarea rather than applied on the spot, so pasted and opened JSON
+   follow one code path and you get to see what you are about to replace
+   your document with before it happens. */
+function replaceFromJSON(){
+  $('#jsonk').classList.add('open');
+  $('#jsonin').value = ''; jsonSource = 'pasted JSON';
+  $('#jsonin').focus();
+}
+function jsonClose(){ $('#jsonk').classList.remove('open'); $('#jsonin').value = ''; }
+/* what the confirmation message calls whatever is in the textarea — a
+   filename once something has been opened into it, otherwise a paste */
+let jsonSource = 'pasted JSON';
+/* returns false and leaves the dialog open on anything it won't take, so
+   a typo is a correction rather than a retype */
+function applyJSON(text, source){
+  let loaded;
+  try{ loaded = JSON.parse(text); }
+  catch(e){ flash(text.trim() ? 'not valid JSON' : 'nothing to replace from'); return false; }
+  if(!loaded || !Array.isArray(loaded.objects) || !Array.isArray(loaded.palette)){
+    flash("that JSON doesn't look like a plakt document"); return false;
+  }
+  commit();
+  doc = loaded;
+  sel = []; entered = null; touch();
+  flash('replaced from ' + source);
+  return true;
+}
 function loadJSONFile(file){
   if(!file) return;
   const reader = new FileReader();
   reader.onload = () => {
-    let loaded;
-    try{ loaded = JSON.parse(reader.result); }
-    catch(e){ return flash('not valid JSON'); }
-    if(!loaded || !Array.isArray(loaded.objects) || !Array.isArray(loaded.palette))
-      return flash("that JSON doesn't look like a plakt document");
-    commit();
-    doc = loaded;
-    sel = []; entered = null; touch();
-    flash('replaced from ' + file.name);
+    /* opening a file with the dialog closed (the file input is reachable
+       on its own) still means "replace from this" — show it first */
+    if(!$('#jsonk').classList.contains('open')) replaceFromJSON();
+    $('#jsonin').value = reader.result;
+    jsonSource = file.name;
   };
   reader.readAsText(file);
 }
@@ -2605,6 +2715,13 @@ addEventListener('keydown', e => {
   const open = $('#cmdk').classList.contains('open');
   const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
 
+  /* the JSON dialog is modal: nothing behind it should act on a key,
+     including ⌘S — you are editing text, not the document */
+  if($('#jsonk').classList.contains('open')){
+    if(e.key === 'Escape'){ e.preventDefault(); jsonClose(); }
+    return;
+  }
+
   if(mod && k === 'k'){ e.preventDefault(); open ? cmdClose() : cmdOpen(); return; }
   if(mod && k === 's'){ e.preventDefault(); save(); return; }
   if(mod && k === 'o'){ e.preventDefault(); openFile(); return; }
@@ -2681,6 +2798,16 @@ const FILE_MENU_ACTIONS = {
 };
 $$('#fileMenu [data-fm]').forEach(b => b.onclick = () => { fileMenuSet(false); FILE_MENU_ACTIONS[b.dataset.fm](); });
 $('#jsonInput').onchange = () => { loadJSONFile($('#jsonInput').files[0]); $('#jsonInput').value = ''; };
+$('#jsonPick').onclick = () => $('#jsonInput').click();
+$('#jsonCancel').onclick = jsonClose;
+$('#jsonOk').onclick = () => { if(applyJSON($('#jsonin').value, jsonSource)) jsonClose(); };
+/* typing in the textarea is the user's own JSON, not a filename any more */
+$('#jsonin').addEventListener('input', () => { jsonSource = 'pasted JSON'; });
+$('#jsonk').addEventListener('pointerdown', e => { if(e.target.id === 'jsonk') jsonClose(); });
+$('#jsonin').addEventListener('keydown', e => {
+  /* ⌘/⌃+Enter submits — plain Enter has to stay a newline inside JSON */
+  if(e.key === 'Enter' && (e.metaKey || e.ctrlKey)){ e.preventDefault(); $('#jsonOk').click(); }
+});
 $('#stage').addEventListener('dblclick', () => { if(!document.body.classList.contains('edit')) mode(true); });
 /* click the stage margin — anywhere off the artboard — to clear the selection */
 $('#stage').addEventListener('pointerdown', e => {
@@ -2710,16 +2837,50 @@ function setZoom(z, cx, cy){
      geometry is baked into the markup by marks() — redraw it so the
      handles resize with the new zoom instead of at the old one's scale */
   marks();
+  applyPan();       /* zooming about the cursor walks the board — re-clamp where it landed */
+}
+
+/* Keep the artboard reachable. Panning far enough, or zooming repeatedly
+   near an edge (each zoom re-pins transform-origin to the cursor, which
+   walks the board across the stage), used to leave it entirely off
+   screen with nothing left to grab and no way back but ⌘0. So after
+   every view change, if less than KEEP px of the board still overlaps
+   the visible canvas, slide it back until that much does. Measuring the
+   rendered rect rather than deriving it from zoom/pan is what keeps this
+   honest: transform-origin, the board's own responsive height and the
+   stage padding all feed into where it actually is. */
+const KEEP = 90;
+function clampPan(){
+  const b = $('#board').getBoundingClientRect(), st = $('#stage');
+  const s = st.getBoundingClientRect(), p = getComputedStyle(st);
+  /* the stage spans the whole window; its padding is what the rail and
+     the inspector cover, so the content box is the part you can see */
+  const l = s.left + parseFloat(p.paddingLeft),  r = s.right  - parseFloat(p.paddingRight);
+  const t = s.top  + parseFloat(p.paddingTop),   bo = s.bottom - parseFloat(p.paddingBottom);
+  /* a board smaller than KEEP can never satisfy it — ask for all of it */
+  const kx = Math.min(KEEP, b.width), ky = Math.min(KEEP, b.height);
+  const x0 = panX, y0 = panY;
+  if(b.right < l + kx)      panX += l + kx - b.right;
+  else if(b.left > r - kx)  panX += r - kx - b.left;
+  if(b.bottom < t + ky)     panY += t + ky - b.bottom;
+  else if(b.top > bo - ky)  panY += bo - ky - b.top;
+  return panX !== x0 || panY !== y0;
 }
 function applyPan(){
-  $('#board').style.setProperty('--panx', panX + 'px');
-  $('#board').style.setProperty('--pany', panY + 'px');
+  const put = () => {
+    $('#board').style.setProperty('--panx', panX + 'px');
+    $('#board').style.setProperty('--pany', panY + 'px');
+  };
+  put();
+  if(clampPan()) put();   /* clampPan measures the board where put() just left it */
 }
 function resetView(){
   $('#board').style.transformOrigin = '';
   panX = 0; panY = 0; applyPan();
   setZoom(1);
 }
+/* a window small enough can strand a board that was fine a moment ago */
+addEventListener('resize', applyPan);
 $('#stage').addEventListener('wheel', e => {
   e.preventDefault();
   if(e.ctrlKey || e.metaKey){ setZoom(zoom * Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY); return; }
