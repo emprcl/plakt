@@ -89,6 +89,12 @@ body.edit.grid #gridlines{opacity:1}
 .hd:hover{fill:#000;stroke:#fff}
 .hd-l{stroke:#000;stroke-width:calc(1px/var(--zoom,1));vector-effect:non-scaling-stroke;pointer-events:none}
 #marquee rect{fill:rgba(255,255,255,.1);stroke:#fff;stroke-width:calc(1px/var(--zoom,1));vector-effect:non-scaling-stroke;pointer-events:none}
+/* the outline standing in for a mask shape while you're inside its group
+   — a dashed hairline you can still click, and nothing at all outside
+   edit mode (a saved plakt is a poster, not an editor) */
+.mg{display:none}
+body.edit .mg{display:block;fill:none;stroke:#12b8d8;stroke-width:calc(1px/var(--zoom,1));
+  stroke-dasharray:5 4;vector-effect:non-scaling-stroke;pointer-events:all;cursor:move}
 body.edit .o{cursor:move}
 body.space #stage{cursor:grab}
 body.space .o{cursor:grab}
@@ -225,6 +231,14 @@ input[type=color]{position:absolute;opacity:0;width:1px;height:1px;pointer-event
 .ly .lv{margin-left:auto;color:var(--faint);font-size:9px;letter-spacing:.1em;opacity:0}
 .ly:hover .lv{opacity:1}
 .ly .lv:hover{color:var(--ink)}
+/* MASK sits next to HIDE on group children only, and — like SHOW — stays
+   put once it's on, since an active mask is state you need to be able to
+   find again */
+.ly .lm{margin-left:auto;color:var(--faint);font-size:9px;letter-spacing:.1em;opacity:0}
+.ly:hover .lm{opacity:1}
+.ly .lm:hover{color:var(--ink)}
+.ly .lm.on{opacity:1;color:#12b8d8}
+.ly .lm + .lv{margin-left:0}
 .ly.off{color:var(--faint)}
 .ly.off .t{text-decoration:line-through}
 .ly.off .lv{opacity:1}
@@ -742,6 +756,46 @@ function rotAttr(o){
   const p = pivot(o);
   return ` transform="rotate(${o.rot} ${p.x} ${p.y})"`;
 }
+/* MASKS — one child of a group can be marked as its mask, and the rest of
+   the group is then clipped to that shape: the way to show an image only
+   where a shape covers it. It's a clip, not a blend — blend modes combine
+   colours, and this is a question about coverage, so no combination of
+   them can express it.
+   Which child is flagged is what matters, not where it sits in the stack
+   (Illustrator says the mask is the topmost object, Figma says the
+   bottommost; both catch people out). Only geometry can clip: an <image>
+   has none, and a line encloses no area, so neither can serve. A hidden
+   child doesn't mask either — hiding it is a way to switch the mask off
+   and see the whole thing while you work. */
+const MASKABLE = ['rect','ellipse','half','triangle','text'];
+const canMask = o => !!o && !o.hidden && MASKABLE.includes(o.type);
+const maskChildOf = g => (g.children || []).find(c => c.mask && canMask(c)) || null;
+/* Drilling into or out of a group changes what the artwork layer contains
+   (the ghost below), which the usual marks()+panel() pair doesn't redraw.
+   Rather than promote every click to a full rebuild, only redraw when a
+   mask is actually involved on one side of the move or the other. */
+function enter(v){
+  const was = entered;
+  entered = v;
+  if(was === v) return;
+  const masked = id => {
+    const g = id !== null && doc.objects.find(o => o.id === id && o.type === 'group');
+    return !!g && !!maskChildOf(g);
+  };
+  if(masked(was) || masked(v)) renderSVG();
+}
+/* The mask shape paints nothing once it's doing its job, so while you're
+   inside the group it's drawn as a bare outline — otherwise the only way
+   to reach it would be the layer list. Editor chrome: `.mg` is stripped
+   from exports, and hidden by CSS outside edit mode so a saved file that
+   happened to be serialised mid-edit still renders clean. */
+function maskGhost(m, g){
+  if(entered !== g.id) return '';
+  /* the mask's own markup again, restyled by CSS — same element, same
+     attributes, so patch() updates the ghost and the clip identically
+     without knowing which is which. Text masks outline their letterforms. */
+  return shapeSVG({ ...m, mask: false }).replace('class="o"', 'class="o mg"');
+}
 /* a group's children are stored in its own local frame (relative to their
    natural bounding box, pre-scale) — map that frame onto the group's
    current x/y/w/h/rot: place+scale first, then rotate the whole thing
@@ -784,8 +838,24 @@ function shapeSVG(o){
      out of the exports and the saved file's artwork for free, while the
      object itself stays in doc, in the stack, and in undo */
   if(o.hidden) return '';
-  if(o.type === 'group')
-    return `<g class="o" data-id="${o.id}"${opAttr(o)}${blendAttr(o)} transform="${groupTransform(o)}">${o.children.map(shapeSVG).join('')}</g>`;
+  if(o.type === 'group'){
+    const m = maskChildOf(o);
+    /* no mask: the plain case, children straight into the group's <g> */
+    const inner = !m
+      ? o.children.map(shapeSVG).join('')
+      /* masked: the mask shape's geometry becomes a clip the rest of the
+         group is cut to. It is pure geometry — the shape's own fill,
+         border and opacity never paint, which is why the clip is built
+         from the same shapeSVG() output rather than a separate code path
+         (the attributes inside a <clipPath> are simply ignored). The mask
+         itself is left out of the clipped set: it defines the hole, it
+         doesn't sit in it. maskGhost() puts an outline back on screen so
+         there is still something to grab while editing. */
+      : `<clipPath id="mask-${o.id}">${shapeSVG({ ...m, mask: false })}</clipPath>` +
+        `<g clip-path="url(#mask-${o.id})">${o.children.filter(c => c !== m).map(shapeSVG).join('')}</g>` +
+        maskGhost(m, o);
+    return `<g class="o" data-id="${o.id}"${opAttr(o)}${blendAttr(o)} transform="${groupTransform(o)}">${inner}</g>`;
+  }
   const b = box(o), t = rotAttr(o);
   if(o.type === 'line')                // a stroke, not a fill — no palette-fill attribute at all
     return `<line class="o" data-id="${o.id}"${t}${opAttr(o)} x1="${b.x}" y1="${b.y}" x2="${b.x+b.w}" y2="${b.y+b.h}" stroke="${fillPaint(o.fill)}" stroke-width="${o.sw||2}" stroke-linecap="round"${dashAttr(o)} pointer-events="stroke"/>`;
@@ -904,7 +974,10 @@ const NS = 'http://www.w3.org/2000/svg';
 function textHits(){
   allObjects().forEach(o => {
     if(o.type !== 'text') return;
-    const el = svgEl.querySelector(`[data-id="${o.id}"]`); if(!el) return;
+    /* skip the copy living inside a <clipPath> — inserting a hit rect in
+       there would silently become part of the clip */
+    const el = [...svgEl.querySelectorAll(`[data-id="${o.id}"]`)].find(n => !n.closest('clipPath'));
+    if(!el) return;
     const b = textBox(o), p = unit()*0.3, r = document.createElementNS(NS, 'rect');
     r.setAttribute('x', b.x - p);     r.setAttribute('y', b.y - p);
     r.setAttribute('width',  b.w + p*2);
@@ -948,9 +1021,15 @@ function renderSVG(){
   marks();
 }
 
-/* patch one object in place — never rebuild the DOM mid-interaction */
+/* patch one object in place — never rebuild the DOM mid-interaction.
+   Every element carrying the id, not just the first: a mask shape is in
+   the DOM twice, once as the clip's geometry and once as the ghost
+   outline standing in for it, and a drag has to move both together or
+   the revealed area lags behind the outline you're dragging. */
 function patch(o){
-  const el = svgEl.querySelector(`[data-id="${o.id}"]`); if(!el) return;
+  svgEl.querySelectorAll(`[data-id="${o.id}"]`).forEach(el => patchEl(o, el));
+}
+function patchEl(o, el){
   if(o.type === 'group'){ el.setAttribute('transform', groupTransform(o)); return; }
   const b = box(o), t = rotAttr(o).replace(/^ transform="|"$/g,'');
   t ? el.setAttribute('transform', t) : el.removeAttribute('transform');
@@ -1194,7 +1273,8 @@ function groupPanel(o){
     </select>
   </div>
   <div class="sec">
-    ${secHead('Group', `${o.children.length} object${o.children.length===1?'':'s'} inside · double-click one to edit it directly`)}
+    ${secHead('Group', `${o.children.length} object${o.children.length===1?'':'s'} inside · double-click one to edit it directly · mark one as MASK in the Layers tab to show the rest only where that shape covers them`,
+      maskChildOf(o) ? '<em>masked</em>' : '')}
     <button class="alb" id="ungroupBtn" style="width:auto;padding:5px 10px">⇧⌘G UNGROUP</button>
   </div>`;
 }
@@ -1366,6 +1446,7 @@ function docPanel(){
       <button class="ly ${sel.includes(o.id)?'on':''}${o.hidden?' off':''}" draggable="true" data-pick="${o.id}"${parent!=null ? ` data-parent="${parent}" style="padding-left:26px"` : ''}>
         <span class="ch" style="${o.type==='group'||o.type==='image' ? 'background:transparent;box-shadow:inset 0 0 0 1px var(--hair)' : `background:${fillCSS(o.fill)}`}"></span>
         <span class="t">${o.type === 'group' ? 'group' : o.type === 'text' ? esc(o.str.split('\n')[0].slice(0,18)) : o.type}</span>
+        ${parent != null ? `<span class="lm${o.mask?' on':''}" data-mask="${o.id}" title="${o.mask ? 'Stop masking with this shape — the whole group shows again' : 'Use this shape as the group\'s mask: everything else in the group shows only where this shape covers it'}">MASK</span>` : ''}
         <span class="lv" data-vis="${o.id}" title="${o.hidden ? 'Show this layer again' : 'Hide this layer — it stays in the document but stops rendering, and stops exporting'}">${o.hidden ? 'SHOW' : 'HIDE'}</span>
         <span class="x">#${o.id}</span>
       </button>`;
@@ -1630,6 +1711,8 @@ function wire(){
        would be invalid markup), so catch it before the row acts on it */
     const v = e.target.closest('[data-vis]');
     if(v){ toggleHidden(+v.dataset.vis); return; }
+    const mk = e.target.closest('[data-mask]');
+    if(mk){ toggleMask(+mk.dataset.mask); return; }
     const id = +b.dataset.pick;
     const parent = b.dataset.parent ? +b.dataset.parent : null;
     if(e.shiftKey && parent === entered){
@@ -1810,7 +1893,7 @@ svgEl.addEventListener('pointerdown', e => {
        drilling into a group instead of dragging it */
     const insideEntered = pg !== null && pg === entered;
     const id = insideEntered ? rawId : (pg ?? rawId);
-    if(!insideEntered) entered = null;
+    if(!insideEntered) enter(null);
     sel = sel.includes(id) ? sel.filter(s => s !== id) : [...sel, id];
     tab = 'selection'; marks(); panel();
     return;                        /* toggle only — drag needs a fresh press */
@@ -1829,8 +1912,8 @@ svgEl.addEventListener('pointerdown', e => {
   lastClick = { id: rawId, t: now };
   const insideEntered = pg !== null && pg === entered;
   const id = (isDbl || insideEntered) ? rawId : (pg ?? rawId);
-  if(isDbl) entered = pg;
-  else if(!insideEntered) entered = null;
+  if(isDbl) enter(pg);
+  else if(!insideEntered) enter(null);
 
   /* clicking a fresh object replaces the selection; clicking a member of
      an existing multi-selection keeps the group so it can be dragged as one */
@@ -2083,6 +2166,24 @@ function del(){
    automatic: leaving it selected would float a set of handles over a gap
    where nothing is drawn any more. Unhiding doesn't reselect it — you
    asked to see it, not to start editing it. */
+/* At most one mask per group — flagging a child clears whichever sibling
+   held it, so the control reads as "which shape is the mask" rather than
+   a set of independent switches that mostly cancel each other out. */
+function toggleMask(id){
+  const parent = doc.objects.find(o => o.type === 'group' && o.children.some(c => c.id === id));
+  if(!parent) return flash('only a shape inside a group can be its mask');
+  const child = parent.children.find(c => c.id === id);
+  if(!canMask(child) && !child.mask)
+    return flash(child.type === 'image' ? "an image has no outline to cut with — mask with a shape or some text"
+      : child.type === 'line' ? 'a line encloses no area, so it would hide everything'
+      : "that can't be a mask");
+  commit();
+  const on = !child.mask;
+  parent.children.forEach(c => { c.mask = undefined; });
+  child.mask = on || undefined;
+  touch();
+  flash(on ? 'masking the group to this shape' : 'mask off');
+}
 function toggleHidden(id){
   const o = allObjects().find(o => o.id === id); if(!o) return;
   commit();
@@ -2167,7 +2268,10 @@ function ungroupSel(){
   if(!g || g.type !== 'group') return flash('select a group to ungroup');
   commit();
   const list = activeList(), idx = list.indexOf(g);
-  const baked = g.children.map(c => bakeChild(c, g));
+  /* a mask flag only means anything relative to its group's other
+     children — once they're loose siblings, the shape is just a shape
+     again (and it starts painting its own fill, which it had stopped) */
+  const baked = g.children.map(c => ({ ...bakeChild(c, g), mask: undefined }));
   list.splice(idx, 1, ...baked);
   sel = baked.map(o => o.id); tab = 'selection'; touch();
 }
@@ -2623,6 +2727,7 @@ function standaloneSVG(){
   const g = c.querySelector('#gridlines'); if(g) g.remove();
   const gu = c.querySelector('#guides');    if(gu) gu.remove();
   const hd = c.querySelector('#handles');  if(hd) hd.remove();
+  c.querySelectorAll('.mg').forEach(n => n.remove());   /* mask outlines are editor chrome */
   c.setAttribute('width', doc.w); c.setAttribute('height', doc.h);
   c.setAttribute('xmlns', NS);
   /* an SVG rasterised through an <img> is its own document — it cannot
@@ -2801,7 +2906,7 @@ addEventListener('keydown', e => {
   const edit = document.body.classList.contains('edit');
   if(k === 'e' && !edit){ mode(true); return; }
   if(e.key === 'Escape'){
-    if(entered !== null){ entered = null; marks(); panel(); }
+    if(entered !== null){ enter(null); marks(); panel(); }
     else if(sel.length){ sel = []; marks(); panel(); }
     else mode(false);
     return;
@@ -2870,7 +2975,7 @@ $('#stage').addEventListener('dblclick', () => { if(!document.body.classList.con
 /* click the stage margin — anywhere off the artboard — to clear the selection */
 $('#stage').addEventListener('pointerdown', e => {
   if(!document.body.classList.contains('edit') || e.target.closest('#board')) return;
-  if(sel.length || entered !== null){ sel = []; entered = null; marks(); panel(); }
+  if(sel.length || entered !== null){ sel = []; enter(null); marks(); panel(); }
 });
 /* ── zoom + pan ──────────────────────────────────────────────────────
    ⌃/⌘ + scroll zooms the artboard in place. A trackpad pinch is reported
