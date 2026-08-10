@@ -3,6 +3,11 @@ const { openApp, getDoc, getSel, addShape, dragBy } = require('./helpers');
 
 /* let the capture the setup edit scheduled fire, then wipe it, so what a
    test asserts on afterwards can only be its own edit's capture */
+/* the versions list now hangs off the status bar, built fresh on open */
+async function openVersions(page) {
+  if (!(await page.locator('#verMenu.open').count())) await page.click('#verMenuBtn');
+}
+
 async function settleAndClear(page) {
   await page.waitForFunction(() => localStorage.getItem('plakt:versions:untitled') !== null, { timeout: 5000 });
   await page.evaluate(() => localStorage.clear());
@@ -189,42 +194,68 @@ test.describe('versions (local storage only, captured automatically)', () => {
     expect(stored).toHaveLength(1);
   });
 
-  test('the Versions tab badge reflects the stored count after a save', async ({ page }) => {
+  /* Versions moved out of the inspector and onto the status bar next to
+     SAVE: they describe the file, not whatever happens to be selected. */
+  test('there is no Versions tab in the inspector any more', async ({ page }) => {
+    expect(await page.locator('.tab[data-tab="versions"]').count()).toBe(0);
+    await expect(page.locator('#verMenuBtn')).toBeVisible();
+  });
+
+  test('the button counts the stored versions, and shows no count at zero', async ({ page }) => {
+    expect(await page.locator('#verMenuBtn em').count()).toBe(0);
+
     await mockSavePicker(page);
     await page.keyboard.press('Meta+s');
     await page.waitForFunction(() => document.querySelector('#msg').textContent.includes('written back'));
-    await page.evaluate(() => { tab = 'versions'; panel(); });
-    expect(await page.locator('.tab[data-tab="versions"] em').textContent()).toBe('1');
-    await expect(page.locator('.vrow')).toHaveCount(1);
+    await expect(page.locator('#verMenuBtn em')).toHaveText('1');
+
+    await openVersions(page);
+    await expect(page.locator('#verMenu .vrow')).toHaveCount(1);
   });
 
-  test('the Versions tab list itself refreshes live if it is the tab already open when a capture happens', async ({ page }) => {
-    await page.evaluate(() => { tab = 'versions'; panel(); });
-    await expect(page.locator('.vrow')).toHaveCount(0);
-
-    await addShape(page, 'r'); // switches tab away to show the new object
-    await page.evaluate(() => { tab = 'versions'; panel(); }); // switch back, as a user watching it would
-
-    await page.waitForFunction(() => document.querySelectorAll('.vrow').length > 0, { timeout: 5000 });
-    await expect(page.locator('.vrow')).toHaveCount(1);
-  });
-
-  test('the very first version ever captured for a document creates the tab badge, not just patches it', async ({ page }) => {
-    expect(await page.locator('.tab[data-tab="versions"] em').count()).toBe(0); // no badge with zero versions
+  test('the count keeps up as debounced captures land, with the menu shut', async ({ page }) => {
     await addShape(page, 'r');
     await page.waitForFunction(() => localStorage.getItem('plakt:versions:untitled') !== null, { timeout: 5000 });
-    await expect(page.locator('.tab[data-tab="versions"] em')).toHaveText('1');
+    await expect(page.locator('#verMenuBtn em')).toHaveText('1');
   });
 
-  test('restoring a version replaces the document and is itself undoable', async ({ page }) => {
+  test('the menu is built fresh each time it opens', async ({ page }) => {
+    await openVersions(page);
+    await expect(page.locator('#verMenu .vrow')).toHaveCount(0);
+    await expect(page.locator('#verMenu')).toContainText('no saved versions yet');
+    await page.click('#verMenuBtn');                    // shut again
+
+    await addShape(page, 'r');
+    await page.waitForFunction(() => localStorage.getItem('plakt:versions:untitled') !== null, { timeout: 5000 });
+
+    await openVersions(page);
+    await expect(page.locator('#verMenu .vrow')).toHaveCount(1);
+  });
+
+  test('opening one status-bar menu shuts the other', async ({ page }) => {
+    await openVersions(page);
+    await page.click('#fileMenuBtn');
+    await expect(page.locator('#verMenu')).not.toHaveClass(/open/);
+    await expect(page.locator('#fileMenu')).toHaveClass(/open/);
+
+    await page.click('#verMenuBtn');
+    await expect(page.locator('#fileMenu')).not.toHaveClass(/open/);
+    await expect(page.locator('#verMenu')).toHaveClass(/open/);
+
+    await page.mouse.click(700, 400);                   // anywhere else
+    await expect(page.locator('#verMenu')).not.toHaveClass(/open/);
+  });
+
+  test('restoring a version replaces the document, shuts the menu, and is undoable', async ({ page }) => {
     await addShape(page, 'r');
     await page.evaluate(() => captureVersion()); // version A: 1 rect
 
     await addShape(page, 'c'); // now 2 objects, not saved as a version
 
-    await page.evaluate(() => { tab = 'versions'; panel(); });
-    await page.click('[data-restore]');
+    await openVersions(page);
+    await page.locator('#verMenu [data-restore]').first().click();
     expect((await getDoc(page)).objects).toHaveLength(1);
+    await expect(page.locator('#verMenu')).not.toHaveClass(/open/);
 
     await page.keyboard.press('Control+z');
     expect((await getDoc(page)).objects).toHaveLength(2); // the restore itself was undoable
@@ -232,34 +263,46 @@ test.describe('versions (local storage only, captured automatically)', () => {
 
   test('deleting a version asks for confirmation and removes it from storage', async ({ page }) => {
     await page.evaluate(() => captureVersion());
-    await page.evaluate(() => { tab = 'versions'; panel(); });
-    await expect(page.locator('.vrow')).toHaveCount(1);
+    await openVersions(page);
+    await expect(page.locator('#verMenu .vrow')).toHaveCount(1);
 
     page.on('dialog', dialog => dialog.accept());
-    await page.click('[data-delver]');
-    await expect(page.locator('.vrow')).toHaveCount(0);
+    await page.locator('#verMenu [data-delver]').click();
+    await expect(page.locator('#verMenu .vrow')).toHaveCount(0);
+    await expect(page.locator('#verMenu')).toHaveClass(/open/);   // stays up to delete more
+    expect(await page.locator('#verMenuBtn em').count()).toBe(0); // count back to nothing
     expect(JSON.parse(await page.evaluate(() => localStorage.getItem('plakt:versions:untitled')))).toHaveLength(0);
   });
 
   test('deleting a version is cancellable', async ({ page }) => {
     await page.evaluate(() => captureVersion());
-    await page.evaluate(() => { tab = 'versions'; panel(); });
+    await openVersions(page);
     page.on('dialog', dialog => dialog.dismiss());
-    await page.click('[data-delver]');
-    await expect(page.locator('.vrow')).toHaveCount(1);
+    await page.locator('#verMenu [data-delver]').click();
+    await expect(page.locator('#verMenu .vrow')).toHaveCount(1);
+  });
+
+  test('a saved file carries no version rows — they are this browser\'s, not the document\'s', async ({ page }) => {
+    await page.evaluate(() => captureVersion());
+    await openVersions(page);
+    const html = await page.evaluate(() => serialize());
+    // the element itself, not the whole file — the .vrow CSS rule and the
+    // template that builds the rows are both legitimately part of plakt
+    expect(html).toMatch(/<div id="verMenu"[^>]*><\/div>/);
+    expect(html).not.toMatch(/id="verMenu"[^>]*class="[^"]*open/);
   });
 
   test('versions are scoped by document name', async ({ page }) => {
     await page.evaluate(() => captureVersion());
-    await page.evaluate(() => { tab = 'versions'; panel(); });
-    await expect(page.locator('.vrow')).toHaveCount(1);
+    await openVersions(page);
+    await expect(page.locator('#verMenu .vrow')).toHaveCount(1);
 
     await page.click('#fname');
     await page.keyboard.press('Control+a');
     await page.keyboard.type('other-doc');
     await page.keyboard.press('Enter');
-    await page.evaluate(() => { panel(); });
-    await expect(page.locator('.vrow')).toHaveCount(0);
+    await openVersions(page);
+    await expect(page.locator('#verMenu .vrow')).toHaveCount(0);
 
     const untitledStore = await page.evaluate(() => JSON.parse(localStorage.getItem('plakt:versions:untitled')));
     expect(untitledStore).toHaveLength(1); // still there under the old name's key

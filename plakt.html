@@ -254,6 +254,8 @@ body.edit #status{transform:none}
 #fname:hover{border-color:var(--hair)}
 #fname:focus{outline:none;border-color:var(--dim);background:var(--chrome2);cursor:text}
 #dirty{color:#fff}
+/* .rt takes up the slack: whatever carries it is pushed to the right-hand
+   end of the bar, and everything after it rides along beside it */
 #status .rt{margin-left:auto;display:flex;gap:15px;align-items:center}
 #status b{font-weight:400;color:var(--dim)}
 #status .brand{gap:7px;align-items:baseline;color:var(--ink);letter-spacing:.22em;
@@ -263,19 +265,36 @@ body.edit #status{transform:none}
    floating pill: it spans the bar's full height flush to its left edge,
    so the bar's own top/bottom borders double as the button's — the only
    border the button draws itself is the right-hand divider */
-.fmwrap{position:relative;align-self:stretch;margin-left:-14px}
-#fileMenuBtn{height:100%;background:var(--chrome2);color:var(--ink);border:0;
+.fmwrap{position:relative;align-self:stretch}
+.fmwrap:first-child{margin-left:-14px}
+/* the versions segment is the mirror image, hard against the right-hand
+   end: it takes up the bar's slack, its divider is on the left, and it
+   keeps a clear gap before the wordmark so the two don't read as one
+   block (the bar's own 15px gap, plus this) */
+#verwrap{margin-left:auto;margin-right:6px}
+#fileMenuBtn,#verMenuBtn{height:100%;background:var(--chrome2);color:var(--ink);border:0;
   border-right:1px solid var(--hair);padding:0 14px;letter-spacing:.1em;
-  font-size:10px;cursor:pointer}
-#fileMenuBtn:hover{background:var(--chrome)}
-#fileMenuBtn.open{background:var(--ink);color:var(--chrome)}
-#fileMenu{position:absolute;left:0;bottom:100%;margin-bottom:10px;background:var(--chrome2);
+  font-size:10px;cursor:pointer;white-space:nowrap}
+#verMenuBtn{border-right:0;border-left:1px solid var(--hair)}
+#fileMenuBtn:hover,#verMenuBtn:hover{background:var(--chrome)}
+#fileMenuBtn.open,#verMenuBtn.open{background:var(--ink);color:var(--chrome)}
+#verMenuBtn em{font-style:normal;color:var(--faint);margin-left:5px}
+#verMenuBtn.open em{color:var(--chrome)}
+#fileMenu,#verMenu{position:absolute;left:0;bottom:100%;margin-bottom:10px;background:var(--chrome2);
   border:1px solid var(--hair);box-shadow:0 8px 24px rgba(0,0,0,.5);min-width:200px;
   display:none;flex-direction:column;padding:4px 0;z-index:10}
-#fileMenu.open{display:flex}
+#fileMenu.open,#verMenu.open{display:flex}
 #fileMenu button{text-align:left;padding:8px 14px;color:var(--dim);letter-spacing:.06em;
   font-size:11px;white-space:nowrap}
 #fileMenu button:hover{background:var(--chrome);color:var(--ink)}
+/* the versions list can run to VERSION_CAP entries, so it scrolls rather
+   than growing taller than the window */
+/* anchored to the bar's right edge now, or the card would hang off it */
+#verMenu{left:auto;right:0;min-width:260px;max-height:340px;overflow-y:auto;padding:6px 12px}
+#verMenu .vrow{margin:0;width:100%}
+#verMenu .vhead{color:var(--faint);font-size:9px;letter-spacing:.14em;text-transform:uppercase;
+  padding:6px 0 8px}
+#verMenu .tip{margin:0 0 6px}
 .fm-sep{height:1px;background:var(--hair);margin:4px 0}
 
 #cmdk{position:fixed;inset:0;background:rgba(8,8,8,.45);display:none;justify-content:center;
@@ -429,7 +448,11 @@ body.edit #status{transform:none}
   <input class="fn" id="fname" value="untitled" title="Click to rename" spellcheck="false" autocomplete="off">
   <span id="dirty"></span>
   <span id="msg">nothing selected</span>
-  <span class="rt brand">plakt<span class="ver" id="ver"></span></span>
+  <div class="fmwrap" id="verwrap">
+    <button id="verMenuBtn" title="Snapshots kept automatically in this browser — never part of the saved file">VERSIONS ▾</button>
+    <div id="verMenu"></div>
+  </div>
+  <span class="brand">plakt<span class="ver" id="ver"></span></span>
 </footer>
 
 <datalist id="gflist"><option value="Abril Fatface"><option value="Alegreya"><option value="Alegreya Sans"><option value="Alfa Slab One"><option value="Amatic SC"><option value="Anton"><option value="Antonio"><option value="Archivo"><option value="Archivo Black"><option value="Archivo Narrow"><option value="Arvo"><option value="Asap"><option value="Assistant"><option value="Audiowide"><option value="Bai Jamjuree"><option value="Baloo 2"><option value="Bangers"><option value="Barlow"><option value="Barlow Condensed"><option value="Bebas Neue"><option value="Big Shoulders Display"><option value="Bitter"><option value="Bodoni Moda"><option value="Bricolage Grotesque"><option value="Cabin"><option value="Catamaran"><option value="Caveat"><option value="Chakra Petch"><option value="Chivo"><option value="Cinzel"><option value="Codystar"><option value="Comfortaa"><option value="Cormorant Garamond"><option value="Courgette"><option value="Crimson Pro"><option value="Crimson Text"><option value="DM Mono"><option value="DM Sans"><option value="DM Serif Display"><option value="Dancing Script"><option value="Darker Grotesque"><option value="Domine"><option value="Dosis"><option value="EB Garamond"><option value="Epilogue"><option value="Exo 2"><option value="Familjen Grotesk"><option value="Figtree"><option value="Fira Code"><option value="Fira Sans"><option value="Fraunces"><option value="Fredoka"><option value="Gabarito"><option value="General Grotesque"><option value="General Sans"><option value="Great Vibes"><option value="Gruppo"><option value="Heebo"><option value="Hind"><option value="IBM Plex Mono"><option value="IBM Plex Sans"><option value="IBM Plex Serif"><option value="Inconsolata"><option value="Indie Flower"><option value="Instrument Sans"><option value="Instrument Serif"><option value="Inter"><option value="Italiana"><option value="JetBrains Mono"><option value="Josefin Sans"><option value="Jost"><option value="Julius Sans One"><option value="Kanit"><option value="Karla"><option value="Khand"><option value="Lato"><option value="League Spartan"><option value="Libre Baskerville"><option value="Libre Franklin"><option value="Literata"><option value="Lobster"><option value="Lora"><option value="Major Mono Display"><option value="Manrope"><option value="Marcellus"><option value="Megrim"><option value="Merriweather"><option value="Michroma"><option value="Monoton"><option value="Montserrat"><option value="Mulish"><option value="Newsreader"><option value="Nixie One"><option value="Noto Sans"><option value="Noto Serif"><option value="Nunito"><option value="Nunito Sans"><option value="Onest"><option value="Open Sans"><option value="Orbitron"><option value="Oswald"><option value="Outfit"><option value="Overpass"><option value="PT Sans"><option value="PT Serif"><option value="Pacifico"><option value="Permanent Marker"><option value="Petrona"><option value="Philosopher"><option value="Playfair Display"><option value="Playfair Display SC"><option value="Plus Jakarta Sans"><option value="Poppins"><option value="Press Start 2P"><option value="Prompt"><option value="Public Sans"><option value="Quicksand"><option value="Rajdhani"><option value="Raleway"><option value="Righteous"><option value="Roboto"><option value="Roboto Condensed"><option value="Roboto Mono"><option value="Roboto Slab"><option value="Rock Salt"><option value="Rozha One"><option value="Rubik"><option value="Russo One"><option value="Sacramento"><option value="Saira"><option value="Saira Condensed"><option value="Satisfy"><option value="Schibsted Grotesk"><option value="Secular One"><option value="Shadows Into Light"><option value="Share Tech Mono"><option value="Signika"><option value="Silkscreen"><option value="Skranji"><option value="Sora"><option value="Source Sans 3"><option value="Source Serif 4"><option value="Space Grotesk"><option value="Space Mono"><option value="Spectral"><option value="Staatliches"><option value="Syne"><option value="Teko"><option value="Tenor Sans"><option value="Titillium Web"><option value="Ubuntu"><option value="Unbounded"><option value="VT323"><option value="Vollkorn"><option value="Wix Madefor Display"><option value="Work Sans"><option value="Yeseva One"><option value="Zilla Slab"></datalist>
@@ -718,6 +741,35 @@ function gradDefsSVG(){
    url() reference into the <defs> gradDefsSVG() just built */
 const fillPaint = f => isGrad(f) ? `url(#${gradMap.get(gradKey(f))})` : fillHex(f);
 
+/* ── image adjustments ───────────────────────────────────────────────
+   Brightness and contrast as percentages of the original, 100 = the
+   pixels untouched. Both are one straight line per colour channel, so
+   the pair collapses into a single feComponentTransfer rather than two
+   stacked filters:
+       brightness:  out = in·b
+       contrast:    out = (in − ½)·c + ½
+       together:    out = in·b·c + (½ − ½c)
+   i.e. slope = b·c, intercept = ½ − ½c.
+   A real <filter> rather than the CSS filter property, because export
+   rasterises the SVG through an <img> — its own document, which can't
+   see this page's stylesheet. And sRGB explicitly: filters default to
+   linearRGB, which would quietly brighten everything on its own. */
+const IMGFX = ['bright','contrast'];
+const fxOf = o => [o.bright ?? 100, o.contrast ?? 100];
+const hasFx = o => o.type === 'image' && fxOf(o).some(v => v !== 100);
+let fxMap = new Map();
+function imgFxDefs(){
+  const keys = [...new Set(allObjects().filter(hasFx).map(o => fxOf(o).join(':')))];
+  fxMap = new Map(keys.map((k,i) => [k, 'imgfx' + i]));
+  return keys.map((k,i) => {
+    const [b, c] = k.split(':').map(n => +n/100);
+    const fn = ch => `<feFunc${ch} type="linear" slope="${b*c}" intercept="${0.5 - 0.5*c}"/>`;
+    return `<filter id="imgfx${i}" color-interpolation-filters="sRGB">` +
+      `<feComponentTransfer>${fn('R')}${fn('G')}${fn('B')}</feComponentTransfer></filter>`;
+  }).join('');
+}
+const fxAttr = o => hasFx(o) ? ` filter="url(#${fxMap.get(fxOf(o).join(':'))})"` : '';
+
 /* ── history ─────────────────────────────────────────────────────── */
 const snapshot = () => JSON.stringify(doc);
 function commit(){ undoS.push(snapshot()); if(undoS.length > 80) undoS.shift(); redoS = []; }
@@ -821,15 +873,26 @@ function dashAttr(o){
   if(o.dash === 'dotted') return ` stroke-dasharray="${w*0.01} ${w*2.2}" stroke-linecap="round"`;
   return ` stroke-dasharray="${w*3} ${w*2}"`;
 }
-/* the choices offered in a group's BLEND dropdown — CSS mix-blend-mode
-   values, curated down to the common/useful ones */
+/* the choices offered in the BLEND dropdown — CSS mix-blend-mode values,
+   curated down to the common/useful ones */
 const BLENDS = ['normal','multiply','screen','overlay','darken','lighten','difference','exclusion'];
-/* a group's blend mode only means anything with isolation:isolate — without
-   it, each child would blend individually with whatever's directly behind
-   IT (including its own siblings), instead of the whole group compositing
-   first and blending as one unit against what's behind the group itself */
-const blendAttr = o => (o.blend && o.blend !== 'normal')
-  ? ` style="mix-blend-mode:${o.blend};isolation:isolate"` : '';
+const hasBlend = o => !!o.blend && o.blend !== 'normal';
+/* Blend applies at two levels, and the difference is what `isolation`
+   decides:
+     · on a shape — it blends with whatever is painted beneath it inside
+       its own group, which is how you get an image tinted through a
+       coloured shape sitting on top of it;
+     · on a group — the group composites internally first and then blends
+       as one unit against what's behind the group.
+   A group is therefore ALWAYS isolated, blend mode or not: that's what
+   keeps a child's blend reaching its siblings and stopping there, so a
+   group's appearance doesn't shift when something unrelated moves
+   underneath it. A loose shape (not in a group) has no isolating ancestor
+   and blends against the artboard, which is the only sensible reading of
+   "what's beneath it" out there. */
+const blendAttr = o => hasBlend(o) ? ` style="mix-blend-mode:${o.blend}"` : '';
+const groupBlendAttr = o =>
+  ` style="isolation:isolate${hasBlend(o) ? `;mix-blend-mode:${o.blend}` : ''}"`;
 
 function shapeSVG(o){
   /* a hidden layer is left out of the SVG entirely rather than made
@@ -854,15 +917,15 @@ function shapeSVG(o){
       : `<clipPath id="mask-${o.id}">${shapeSVG({ ...m, mask: false })}</clipPath>` +
         `<g clip-path="url(#mask-${o.id})">${o.children.filter(c => c !== m).map(shapeSVG).join('')}</g>` +
         maskGhost(m, o);
-    return `<g class="o" data-id="${o.id}"${opAttr(o)}${blendAttr(o)} transform="${groupTransform(o)}">${inner}</g>`;
+    return `<g class="o" data-id="${o.id}"${opAttr(o)}${groupBlendAttr(o)} transform="${groupTransform(o)}">${inner}</g>`;
   }
   const b = box(o), t = rotAttr(o);
   if(o.type === 'line')                // a stroke, not a fill — no palette-fill attribute at all
-    return `<line class="o" data-id="${o.id}"${t}${opAttr(o)} x1="${b.x}" y1="${b.y}" x2="${b.x+b.w}" y2="${b.y+b.h}" stroke="${fillPaint(o.fill)}" stroke-width="${o.sw||2}" stroke-linecap="round"${dashAttr(o)} pointer-events="stroke"/>`;
+    return `<line class="o" data-id="${o.id}"${t}${opAttr(o)}${blendAttr(o)} x1="${b.x}" y1="${b.y}" x2="${b.x+b.w}" y2="${b.y+b.h}" stroke="${fillPaint(o.fill)}" stroke-width="${o.sw||2}" stroke-linecap="round"${dashAttr(o)} pointer-events="stroke"/>`;
   if(o.type === 'image')
-    return `<image class="o" data-id="${o.id}"${t}${opAttr(o)} href="${esc(o.src)}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" preserveAspectRatio="none"/>`;
+    return `<image class="o" data-id="${o.id}"${t}${opAttr(o)}${fxAttr(o)}${blendAttr(o)} href="${esc(o.src)}" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" preserveAspectRatio="none"/>`;
   const border = hasStroke(o) ? ` stroke="${fillHex(o.stroke)}" stroke-width="${o.sw||2}"${dashAttr(o)}` : '';
-  const a = `class="o" data-id="${o.id}" fill="${fillPaint(o.fill)}"${border}${opAttr(o)}`;
+  const a = `class="o" data-id="${o.id}" fill="${fillPaint(o.fill)}"${border}${opAttr(o)}${blendAttr(o)}`;
   switch(o.type){
     case 'ellipse':
       return `<ellipse ${a}${t} cx="${b.x+b.w/2}" cy="${b.y+b.h/2}" rx="${b.w/2}" ry="${b.h/2}"/>`;
@@ -1002,7 +1065,7 @@ function renderSVG(){
      allowed to overflow (see #doc-svg in the stylesheet) so the overlay,
      which sits outside that clip, stays whole. */
   svgEl.innerHTML =
-    `<defs>${gradDefsSVG()}<clipPath id="artboard-clip"><rect width="${doc.w}" height="${doc.h}"/></clipPath></defs>` +
+    `<defs>${gradDefsSVG()}${imgFxDefs()}<clipPath id="artboard-clip"><rect width="${doc.w}" height="${doc.h}"/></clipPath></defs>` +
     `<g id="art" clip-path="url(#artboard-clip)">` +
       `<rect id="bg" width="${doc.w}" height="${doc.h}" fill="${bg().hex}"/>` +
       doc.objects.map(shapeSVG).join('') +
@@ -1267,7 +1330,8 @@ function groupPanel(o){
     )}
   </div>
   <div class="sec">
-    ${secHead('Blend', "blends the group's rendered result as one unit against what's behind it — not each shape individually")}
+    ${secHead('Blend', "the group composites its own children first, then blends that finished result as one unit against what's behind the group — for blending the children against each other, set BLEND on a child instead",
+      hasBlend(o) ? `<em>${o.blend}</em>` : '')}
     <select class="sel" data-blend>
       ${BLENDS.map(b => `<option value="${b}"${(o.blend||'normal')===b?' selected':''}>${b.toUpperCase()}</option>`).join('')}
     </select>
@@ -1293,6 +1357,14 @@ function imagePanel(o){
       [num('ROT','rot',o.rot||0,50), num('OPACITY','op',o.op??100,50,'%')]
     )}
   </div>
+  <div class="sec">
+    ${secHead('Adjust',
+      'percentages of the original — 100 leaves the pixels exactly as they are · drag a field to scrub it',
+      hasFx(o) ? '<em>adjusted</em>' : '')}
+    ${num('BRIGHT','bright',o.bright??100,54,'%')}
+    ${num('CONTRAST','contrast',o.contrast??100,54,'%')}
+  </div>
+  ${blendSection(o, parentGroupOf(o.id) !== null)}
   <div class="sec">
     ${secHead('Image', 'embedded as a data URI so the file stays self-contained — a large photo will bloat it')}
     <label class="alb" style="width:auto;padding:5px 10px;display:inline-block;cursor:pointer">REPLACE
@@ -1416,31 +1488,27 @@ function objPanel(o){
       ${num('WEIGHT','sw',o.sw||2)}
       ${dashRow(o)}
     ` : ''}
-  </div>` : ''}`;
+  </div>` : ''}
+  ${blendSection(o, parentGroupOf(o.id) !== null)}`;
+}
+/* the same control on a shape and on a group, saying different things
+   about scope — see blendAttr for why a group is always isolated */
+function blendSection(o, inGroup){
+  return `<div class="sec">
+    ${secHead('Blend',
+      inGroup
+        ? "how this shape mixes with whatever is painted beneath it <b>inside its group</b> — the group seals it off from the rest of the artboard"
+        : "how this shape mixes with whatever is painted beneath it on the artboard · group it with something to confine the blend to that group",
+      hasBlend(o) ? `<em>${o.blend}</em>` : '')}
+    <select class="sel" data-blend>
+      ${BLENDS.map(b => `<option value="${b}"${(o.blend||'normal')===b?' selected':''}>${b.toUpperCase()}</option>`).join('')}
+    </select>
+  </div>`;
 }
 
 let tab = 'artboard';
 
 function docPanel(){
-  if(tab === 'versions'){
-    const list = listVersions();
-    const rows = list.map(v => `
-      <div class="vrow">
-        <div class="vd">
-          <span class="vdate">${formatVersionDate(v.ts)}</span>
-          <span class="vmeta">${v.objects} object${v.objects===1?'':'s'}</span>
-        </div>
-        <div class="va">
-          <button class="alb" data-restore="${v.id}" style="width:auto;padding:4px 8px" title="Replace the current document with this version — you can still undo afterward">RESTORE</button>
-          <button class="verx" data-delver="${v.id}" title="Delete this version — this cannot be undone">×</button>
-        </div>
-      </div>`).join('') || '<div class="tip" style="margin:0">no saved versions yet</div>';
-    return `<div class="sec" style="border:0">
-      ${secHead('Versions', "a snapshot is kept automatically a few seconds after each change settles — local storage only, never part of the saved file itself",
-        `<em>${list.length}</em>`)}
-      ${rows}
-    </div>`;
-  }
   if(tab === 'layers'){
     const row = (o, parent) => `
       <button class="ly ${sel.includes(o.id)?'on':''}${o.hidden?' off':''}" draggable="true" data-pick="${o.id}"${parent!=null ? ` data-parent="${parent}" style="padding-left:26px"` : ''}>
@@ -1499,7 +1567,6 @@ function tabsHTML(o, multi){
     ${o ? t('selection', o.type) : multi ? t('selection', 'Selection', sel.length) : ''}
     ${t('artboard','Artboard')}
     ${t('layers','Layers', doc.objects.length)}
-    ${t('versions','Versions', listVersions().length)}
   </div>`;
 }
 /* shown instead of objPanel() while more than one object is selected —
@@ -1565,6 +1632,7 @@ function fieldGet(k){
     return k === 'gang' ? g.ang : k === 'goff' ? g.off : g.len;
   }
   if(k === 'op') return o.op ?? 100;
+  if(IMGFX.includes(k)) return o[k] ?? 100;   /* an untouched image carries no key at all */
   return Math.round((o[k] ?? 0) * 100) / 100;
 }
 function fieldSet(k, v){
@@ -1595,6 +1663,9 @@ function fieldSet(k, v){
   }
   else if(k === 'sw')             o.sw  = Math.max(1, Math.round(v));
   else if(k === 'op')             o.op  = Math.max(0, Math.min(100, Math.round(v)));
+  /* 0 is a black frame / no contrast at all, 200 is twice the original —
+     past that an image is a solid colour and the field stops being useful */
+  else if(IMGFX.includes(k))      o[k]  = Math.max(0, Math.min(200, Math.round(v)));
   else if(k === 'rx')             o.rx  = Math.max(0, Math.round(v));
   else if(k === 'size')           o.size = Math.max(1, Math.round(v));
   else if(k === 'lh')             o.lh   = Math.max(0, Math.round(v));   /* 0 = auto */
@@ -1803,8 +1874,6 @@ function wire(){
   if(ga) ga.onclick = submit;
   $$('#panel .fx[data-rm]').forEach(b => b.onclick = () => removeWebfont(b.dataset.rm));
   const as = $('#addSw'); if(as) as.onclick = addSwatch;
-  $$('#panel [data-restore]').forEach(b => b.onclick = () => restoreVersion(+b.dataset.restore));
-  $$('#panel [data-delver]').forEach(b => b.onclick = () => { if(confirm('Delete this version? This cannot be undone.')) deleteVersion(+b.dataset.delver); });
   const fk = $('#forkSw');
   if(fk) fk.onclick = () => {                       /* fork a private swatch for this object */
     commit();
@@ -2489,6 +2558,11 @@ function serialize(){
      that JSON, or with the dialog hanging open on load */
   c.querySelector('#jsonk').classList.remove('open');
   c.querySelector('#jsonin').textContent = '';
+  /* the versions menu is built from this browser's local storage on open —
+     stale rows have no business travelling inside the file */
+  c.querySelector('#verMenu').classList.remove('open');
+  c.querySelector('#verMenu').innerHTML = '';
+  c.querySelector('#verMenuBtn').classList.remove('open');
   c.querySelector('title').textContent = doc.name;
   return '<!DOCTYPE html>\n' + c.outerHTML + '\n';
 }
@@ -2682,15 +2756,37 @@ function captureVersion(){
   list.unshift({ id: Date.now(), ts: Date.now(), objects: doc.objects.length, doc: JSON.parse(JSON.stringify(doc)) });
   if(list.length > VERSION_CAP) list.length = VERSION_CAP;
   if(!saveVersionsList(list)) return;
-  if(tab === 'versions'){ panel(); return; }
-  /* the badge is only rendered once there's at least one version (see
-     tabsHTML — badge=0 is falsy, so <em> doesn't exist yet), so the very
-     first capture for a document has to create it, not just patch it */
-  const tabBtn = document.querySelector('.tab[data-tab="versions"]');
-  if(!tabBtn) return;
-  let badge = tabBtn.querySelector('em');
-  if(!badge){ badge = document.createElement('em'); tabBtn.append(' ', badge); }
-  badge.textContent = list.length;
+  renderVersions();
+}
+/* Versions live in the status bar next to SAVE rather than in the
+   inspector: they are a property of the file, not of what's selected, and
+   the inspector is where you work on the latter. Redrawn in place on
+   every capture — the count on the button is the only thing visible when
+   the menu is shut, and it has to stay honest as the debounce fires. */
+function renderVersions(){
+  const list = listVersions(), btn = $('#verMenuBtn'), menu = $('#verMenu');
+  if(!btn || !menu) return;
+  btn.innerHTML = 'VERSIONS ▾' + (list.length ? ` <em>${list.length}</em>` : '');
+  menu.innerHTML =
+    `<div class="vhead">kept in this browser only</div>` +
+    (list.map(v => `
+      <div class="vrow">
+        <div class="vd">
+          <span class="vdate">${formatVersionDate(v.ts)}</span>
+          <span class="vmeta">${v.objects} object${v.objects===1?'':'s'}</span>
+        </div>
+        <div class="va">
+          <button class="alb" data-restore="${v.id}" style="width:auto;padding:4px 8px" title="Replace the current document with this version — you can still undo afterward">RESTORE</button>
+          <button class="verx" data-delver="${v.id}" title="Delete this version — this cannot be undone">×</button>
+        </div>
+      </div>`).join('')
+      || '<div class="tip">no saved versions yet — one is kept a few seconds after each change settles</div>');
+  $$('#verMenu [data-restore]').forEach(b => b.onclick = () => {
+    verMenuSet(false); restoreVersion(+b.dataset.restore);
+  });
+  $$('#verMenu [data-delver]').forEach(b => b.onclick = () => {
+    if(confirm('Delete this version? This cannot be undone.')) deleteVersion(+b.dataset.delver);
+  });
 }
 function restoreVersion(id){
   const v = listVersions().find(v => v.id === id);
@@ -2702,7 +2798,7 @@ function restoreVersion(id){
 }
 function deleteVersion(id){
   saveVersionsList(listVersions().filter(v => v.id !== id));
-  panel(); flash('version deleted');
+  renderVersions(); flash('version deleted');
 }
 function formatVersionDate(ts){
   const d = new Date(ts);
@@ -2948,12 +3044,30 @@ $('#fname').addEventListener('focus', () => $('#fname').select());
 $('#fname').addEventListener('change', () => { commit(); doc.name = $('#fname').value.trim() || 'untitled'; touch(); });
 $('#fname').addEventListener('keydown', e => { if(e.key === 'Enter') $('#fname').blur(); });
 /* ── file menu ───────────────────────────────────────────────────── */
+/* two menus hang off the same bar, so opening either shuts the other —
+   the `if(open)` guard is what keeps them from calling each other round
+   in a circle */
 const fileMenuSet = open => {
+  if(open) verMenuSet(false);
   $('#fileMenu').classList.toggle('open', open);
   $('#fileMenuBtn').classList.toggle('open', open);
 };
+const verMenuSet = open => {
+  if(open){ fileMenuSet(false); renderVersions(); }   /* built fresh each time it's opened */
+  $('#verMenu').classList.toggle('open', open);
+  $('#verMenuBtn').classList.toggle('open', open);
+};
 $('#fileMenuBtn').onclick = e => { e.stopPropagation(); fileMenuSet(!$('#fileMenu').classList.contains('open')); };
-document.addEventListener('click', e => { if(!e.target.closest('.fmwrap')) fileMenuSet(false); });
+$('#verMenuBtn').onclick = e => { e.stopPropagation(); verMenuSet(!$('#verMenu').classList.contains('open')); };
+document.addEventListener('click', e => {
+  /* isConnected first: a handler inside a menu can rebuild that menu
+     before the click finishes bubbling up here (deleting a version does
+     exactly that), and closest() on the now-detached node walks an
+     orphaned tree that never reaches .fmwrap — which would read as a
+     click outside and shut the menu the user is still working in */
+  if(!e.target.isConnected || e.target.closest('.fmwrap')) return;
+  fileMenuSet(false); verMenuSet(false);
+});
 const FILE_MENU_ACTIONS = {
   save: save, open: openFile, saveCopy: saveAsCopy, replace: replaceFromJSON,
   copyJson: copyJSON, copySvg: copySVGText, new: newDoc,
@@ -3096,6 +3210,7 @@ ensureWebfonts();
 
 /* boot in view mode — you received a plakt, not an application */
 full();
+renderVersions();   /* the count on the status bar button, before anything is captured */
 /* flash() has to come after full() — full() calls panel(), which calls
    sync(), which stomps #msg unconditionally, so anything flashed earlier
    in boot would vanish before it was ever visible */
