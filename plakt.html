@@ -990,16 +990,23 @@ const full = () => { renderSVG(); panel(); status(); };
    postpones the capture rather than firing one, so a burst of edits (a
    run of keystrokes, several drags in a row) settles into a single
    snapshot once things go quiet, instead of one per change. Called from
-   touch() for discrete edits, and separately from endDrag() — a drag
-   mutates o.x/o.y etc. directly frame-by-frame for performance (see the
-   pointermove handler) and only calls full() at the end, never touch(),
-   so without this second call point every move/resize/rotate would
-   silently never version at all. */
+   touch() for discrete edits, and separately from every edit path that
+   deliberately skips touch() to avoid a panel rebuild mid-interaction —
+   endDrag(), the number-field scrub/arrow/change handlers, and the text
+   and swatch <input>s (all via liveEdit() where they share a shape). A
+   drag mutates o.x/o.y directly frame-by-frame for performance (see the
+   pointermove handler) and only calls full() at the end, never touch();
+   the panel fields keep focus by re-rendering without panel(). Any such
+   path that forgets to call this here never versions at all. */
 function scheduleVersionCapture(){
   clearTimeout(versionTimer);
   versionTimer = setTimeout(captureVersion, VERSION_DEBOUNCE);
 }
 const touch = () => { dirty = true; full(); scheduleVersionCapture(); };
+/* touch() for the handlers that can't afford panel()'s rebuild: same
+   bookkeeping, minus the parts that would blow away the focused field or
+   the input being scrubbed. */
+const liveEdit = () => { dirty = true; renderSVG(); status(); scheduleVersionCapture(); };
 
 /* ════════════════════════════════════════════════════════════════════
    PANEL
@@ -1413,7 +1420,10 @@ addEventListener('pointermove', e => {
   scrub.inp.value = fieldGet(scrub.k);
   renderSVG(); status();                         /* never panel() mid-scrub */
 }, {passive:false});
-addEventListener('pointerup', () => { if(scrub && scrub.live) panel(); scrub = null; });
+addEventListener('pointerup', () => {
+  if(scrub && scrub.live){ panel(); scheduleVersionCapture(); }   /* scrubbing X/Y is a move like any other — version it */
+  scrub = null;
+});
 
 function sync(){
   const o = cur();
@@ -1429,14 +1439,14 @@ function wire(){
   $$('#panel .n[data-k]').forEach(inp => {
     const k = inp.dataset.k;
     inp.addEventListener('focus', () => inp.select());
-    inp.addEventListener('change', () => { commit(); fieldSet(k, parseFloat(inp.value) || 0); full(); });
+    inp.addEventListener('change', () => { commit(); fieldSet(k, parseFloat(inp.value) || 0); touch(); });
     inp.addEventListener('keydown', e => {
       if(e.key === 'Enter'){ inp.blur(); return; }
       if(e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
       e.preventDefault(); commit();
       fieldSet(k, (parseFloat(inp.value)||0) + (e.key === 'ArrowUp' ? 1 : -1) * (e.shiftKey ? 10 : 1));
       inp.value = fieldGet(k);
-      renderSVG(); status();          /* not panel() — that would kill focus */
+      liveEdit();                     /* not panel() — that would kill focus */
     });
   });
 
@@ -1494,7 +1504,7 @@ function wire(){
   $$('#panel .alb[data-al]').forEach(b => b.onclick = () => { commit(); o.al = b.dataset.al; touch(); });
   $$('#panel input[data-edit]').forEach(i => {
     i.addEventListener('focus', commit, {once:true});
-    i.oninput = () => { doc.palette.find(p => p.id === i.dataset.edit).hex = i.value; dirty = true; renderSVG(); status(); };
+    i.oninput = () => { doc.palette.find(p => p.id === i.dataset.edit).hex = i.value; liveEdit(); };
   });
   $$('#panel .ly[data-pick]').forEach(b => b.onclick = e => {
     const id = +b.dataset.pick;
@@ -1557,7 +1567,7 @@ function wire(){
   const ts = $('#tstr');
   if(ts){
     ts.addEventListener('focus', commit, {once:true});
-    ts.oninput = () => { o.str = ts.value; dirty = true; renderSVG(); status(); };
+    ts.oninput = () => { o.str = ts.value; liveEdit(); };
   }
   const st = $('#snapT'); if(st) st.onclick = () => { snap = !snap; syncSnapUI(); panel(); };
   const gt = $('#gridT'); if(gt) gt.onclick = () => { document.body.classList.toggle('grid'); panel(); };

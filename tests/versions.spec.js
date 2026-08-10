@@ -1,5 +1,12 @@
 const { test, expect } = require('@playwright/test');
-const { openApp, getDoc, addShape, dragBy } = require('./helpers');
+const { openApp, getDoc, getSel, addShape, dragBy } = require('./helpers');
+
+/* let the capture the setup edit scheduled fire, then wipe it, so what a
+   test asserts on afterwards can only be its own edit's capture */
+async function settleAndClear(page) {
+  await page.waitForFunction(() => localStorage.getItem('plakt:versions:untitled') !== null, { timeout: 5000 });
+  await page.evaluate(() => localStorage.clear());
+}
 
 /* file:// localStorage isn't reliably isolated per test context, and every
    fresh doc defaults to the same name ("untitled") — clear it explicitly
@@ -67,6 +74,84 @@ test.describe('versions (local storage only, captured automatically)', () => {
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('plakt:versions:untitled')));
     expect(stored[0].doc.objects[0].x).toBe(after.x);
     expect(stored[0].doc.objects[0].y).toBe(after.y);
+  });
+
+  /* the handlers below all deliberately skip touch() so they don't rebuild
+     the panel out from under the field being typed in or scrubbed — which
+     is exactly how they each used to lose their version capture too. */
+  test('typing into a text object captures a version', async ({ page }) => {
+    await addShape(page, 't');
+    await settleAndClear(page);
+
+    await page.click('#tstr');
+    await page.keyboard.type('HELLO');
+    expect((await getDoc(page)).objects[0].str).toContain('HELLO');
+
+    await page.waitForFunction(() => localStorage.getItem('plakt:versions:untitled') !== null, { timeout: 5000 });
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('plakt:versions:untitled')));
+    expect(stored).toHaveLength(1);                       // the whole typed burst, not one per keystroke
+    expect(stored[0].doc.objects[0].str).toContain('HELLO');
+  });
+
+  test('scrubbing a panel number field captures a version without waiting for a deselect', async ({ page }) => {
+    await addShape(page, 'r');
+    await settleAndClear(page);
+
+    const b = await page.locator('#panel .n[data-k="x"]').first().boundingBox();
+    const cy = b.y + b.height / 2;
+    await page.mouse.move(b.x + b.width / 2, cy);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width / 2 + 60, cy, { steps: 8 });
+    await page.mouse.up();
+    const x = (await getDoc(page)).objects[0].x;
+
+    await page.waitForFunction(() => localStorage.getItem('plakt:versions:untitled') !== null, { timeout: 5000 });
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('plakt:versions:untitled')));
+    expect(stored[0].doc.objects[0].x).toBe(x);
+    expect(await getSel(page)).toHaveLength(1);           // still selected — nothing had to be deselected first
+  });
+
+  test('nudging a panel number field with ↑/↓ captures a version', async ({ page }) => {
+    await addShape(page, 'r');
+    await settleAndClear(page);
+
+    await page.locator('#panel .n[data-k="x"]').first().click();
+    await page.keyboard.press('ArrowUp');
+    const x = (await getDoc(page)).objects[0].x;
+
+    await page.waitForFunction(() => localStorage.getItem('plakt:versions:untitled') !== null, { timeout: 5000 });
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('plakt:versions:untitled')));
+    expect(stored[0].doc.objects[0].x).toBe(x);
+  });
+
+  test('committing a panel number field with Enter captures a version', async ({ page }) => {
+    await addShape(page, 'r');
+    await settleAndClear(page);
+
+    await page.locator('#panel .n[data-k="x"]').first().click();
+    await page.keyboard.press('Control+a');
+    await page.keyboard.type('333');
+    await page.keyboard.press('Enter');
+    expect((await getDoc(page)).objects[0].x).toBe(333);
+
+    await page.waitForFunction(() => localStorage.getItem('plakt:versions:untitled') !== null, { timeout: 5000 });
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('plakt:versions:untitled')));
+    expect(stored[0].doc.objects[0].x).toBe(333);
+  });
+
+  test('editing a palette swatch colour captures a version', async ({ page }) => {
+    await addShape(page, 'r');
+    await settleAndClear(page);
+
+    await page.evaluate(() => { tab = 'doc'; panel(); });
+    await page.locator('#panel input[data-edit]').first().evaluate(el => {
+      el.value = '#ff0000';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    await page.waitForFunction(() => localStorage.getItem('plakt:versions:untitled') !== null, { timeout: 5000 });
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('plakt:versions:untitled')));
+    expect(stored[0].doc.palette.some(p => p.hex === '#ff0000')).toBe(true);
   });
 
   test('Save (⌘S) automatically captures a version', async ({ page }) => {
