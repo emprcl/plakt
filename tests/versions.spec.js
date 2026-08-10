@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test');
-const { openApp, getDoc, addShape } = require('./helpers');
+const { openApp, getDoc, addShape, dragBy } = require('./helpers');
 
 /* file:// localStorage isn't reliably isolated per test context, and every
    fresh doc defaults to the same name ("untitled") — clear it explicitly
@@ -50,6 +50,25 @@ test.describe('versions (local storage only, captured automatically)', () => {
     expect(stored[0].objects).toBe(5);    // reflecting the final settled state
   });
 
+  test('dragging a shape (not just discrete edits) eventually captures a version with the new position', async ({ page }) => {
+    // a drag mutates o.x/o.y directly frame-by-frame for performance and
+    // only calls full() at the end, never touch() — so unless endDrag()
+    // also schedules a capture, moving something would never version at all
+    const id = await addShape(page, 'r');
+    await page.waitForFunction(() => localStorage.getItem('plakt:versions:untitled') !== null, { timeout: 5000 });
+    await page.evaluate(() => localStorage.clear()); // isolate the drag's own capture from the "shape added" one
+
+    const before = (await getDoc(page)).objects.find(o => o.id === id);
+    await dragBy(page, id, 80, 40);
+    const after = (await getDoc(page)).objects.find(o => o.id === id);
+    expect(after.x).not.toBe(before.x);
+
+    await page.waitForFunction(() => localStorage.getItem('plakt:versions:untitled') !== null, { timeout: 5000 });
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('plakt:versions:untitled')));
+    expect(stored[0].doc.objects[0].x).toBe(after.x);
+    expect(stored[0].doc.objects[0].y).toBe(after.y);
+  });
+
   test('Save (⌘S) automatically captures a version', async ({ page }) => {
     await addShape(page, 'r');
     await mockSavePicker(page);
@@ -92,6 +111,24 @@ test.describe('versions (local storage only, captured automatically)', () => {
     await page.evaluate(() => { tab = 'versions'; panel(); });
     expect(await page.locator('.tab[data-tab="versions"] em').textContent()).toBe('1');
     await expect(page.locator('.vrow')).toHaveCount(1);
+  });
+
+  test('the Versions tab list itself refreshes live if it is the tab already open when a capture happens', async ({ page }) => {
+    await page.evaluate(() => { tab = 'versions'; panel(); });
+    await expect(page.locator('.vrow')).toHaveCount(0);
+
+    await addShape(page, 'r'); // switches tab away to show the new object
+    await page.evaluate(() => { tab = 'versions'; panel(); }); // switch back, as a user watching it would
+
+    await page.waitForFunction(() => document.querySelectorAll('.vrow').length > 0, { timeout: 5000 });
+    await expect(page.locator('.vrow')).toHaveCount(1);
+  });
+
+  test('the very first version ever captured for a document creates the tab badge, not just patches it', async ({ page }) => {
+    expect(await page.locator('.tab[data-tab="versions"] em').count()).toBe(0); // no badge with zero versions
+    await addShape(page, 'r');
+    await page.waitForFunction(() => localStorage.getItem('plakt:versions:untitled') !== null, { timeout: 5000 });
+    await expect(page.locator('.tab[data-tab="versions"] em')).toHaveText('1');
   });
 
   test('restoring a version replaces the document and is itself undoable', async ({ page }) => {

@@ -986,15 +986,20 @@ function marks(){
    move/delete/duplicate instead (see selectedObjs()) */
 const cur  = () => sel.length === 1 ? allObjects().find(o => o.id === sel[0]) || null : null;
 const full = () => { renderSVG(); panel(); status(); };
-const touch = () => {
-  dirty = true; full();
-  /* auto-capture a version on every modification, debounced: each touch()
-     postpones the capture rather than firing one, so a burst of edits (a
-     drag, a run of keystrokes) settles into a single snapshot once things
-     go quiet, instead of one per change */
+/* auto-capture a version on every modification, debounced: each call
+   postpones the capture rather than firing one, so a burst of edits (a
+   run of keystrokes, several drags in a row) settles into a single
+   snapshot once things go quiet, instead of one per change. Called from
+   touch() for discrete edits, and separately from endDrag() — a drag
+   mutates o.x/o.y etc. directly frame-by-frame for performance (see the
+   pointermove handler) and only calls full() at the end, never touch(),
+   so without this second call point every move/resize/rotate would
+   silently never version at all. */
+function scheduleVersionCapture(){
   clearTimeout(versionTimer);
   versionTimer = setTimeout(captureVersion, VERSION_DEBOUNCE);
-};
+}
+const touch = () => { dirty = true; full(); scheduleVersionCapture(); };
 
 /* ════════════════════════════════════════════════════════════════════
    PANEL
@@ -1846,6 +1851,7 @@ const endDrag = () => {
     if(v < 0 || v > limit){ g[drag.axis].splice(drag.index, 1); flash('guide removed'); }
   }
   if(!drag.moved) undoS.pop();
+  else scheduleVersionCapture();   /* something actually changed — see the comment on scheduleVersionCapture() for why touch() alone can't catch drags */
   snapG = { v:null, h:null };
   drag = null; full();
 };
@@ -2360,20 +2366,27 @@ function saveVersionsList(list){
 }
 /* called automatically — via touch()'s debounce on every edit, and
    immediately from save()/saveAsCopy() — no manual "save version" button
-   exists. Deliberately silent (no flash, no full panel()/sync() rebuild):
-   touch() has already re-rendered everything by the time this runs, and
-   a full panel() call here would both stomp save()'s own flash message
-   (sync() overwrites #msg unconditionally) and risk blurring whatever
-   field the user had focused mid-edit. Just patch the one badge that
-   could be visibly stale. */
+   exists. Never calls flash() itself, and only does a full panel()
+   rebuild when the Versions tab is the one actually showing (it has no
+   focusable fields to disrupt there); any other tab just gets its badge
+   patched in place, so a full rebuild never steals focus from a field
+   the user is mid-edit in. Whichever path runs, it happens before any
+   caller's own flash() (see save()), so nothing here can stomp it. */
 function captureVersion(){
   clearTimeout(versionTimer);   /* an explicit capture (save) preempts a pending debounced one, so they can't fire back-to-back on the same change */
   const list = listVersions();
   list.unshift({ id: Date.now(), ts: Date.now(), objects: doc.objects.length, doc: JSON.parse(JSON.stringify(doc)) });
   if(list.length > VERSION_CAP) list.length = VERSION_CAP;
   if(!saveVersionsList(list)) return;
-  const badge = document.querySelector('.tab[data-tab="versions"] em');
-  if(badge) badge.textContent = list.length;
+  if(tab === 'versions'){ panel(); return; }
+  /* the badge is only rendered once there's at least one version (see
+     tabsHTML — badge=0 is falsy, so <em> doesn't exist yet), so the very
+     first capture for a document has to create it, not just patch it */
+  const tabBtn = document.querySelector('.tab[data-tab="versions"]');
+  if(!tabBtn) return;
+  let badge = tabBtn.querySelector('em');
+  if(!badge){ badge = document.createElement('em'); tabBtn.append(' ', badge); }
+  badge.textContent = list.length;
 }
 function restoreVersion(id){
   const v = listVersions().find(v => v.id === id);
