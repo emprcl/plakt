@@ -81,7 +81,7 @@ body.edit.grid .rul{opacity:1}
 .rul:hover{background:#2a2a28}
 #rulT{left:0;right:0;top:-13px;height:12px;cursor:row-resize}
 #rulL{top:0;bottom:0;left:-13px;width:12px;cursor:col-resize}
-#gridlines{opacity:0;transition:opacity var(--t)}
+#gridlines{opacity:0;transition:opacity var(--t);pointer-events:none}
 body.edit.grid #gridlines{opacity:1}
 .sel-o{fill:none;stroke:#fff;stroke-width:calc(3px/var(--zoom,1));vector-effect:non-scaling-stroke;opacity:.45;pointer-events:none}
 .sel-i{fill:none;stroke:#000;stroke-width:calc(1px/var(--zoom,1));vector-effect:non-scaling-stroke;pointer-events:none}
@@ -217,7 +217,18 @@ input[type=color]{position:absolute;opacity:0;width:1px;height:1px;pointer-event
 .ly.dragover{box-shadow:inset 0 -2px 0 var(--ink)}
 .ly .ch{width:9px;height:9px;flex:none}
 .ly .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:.08em}
-.ly .x{margin-left:auto;color:var(--faint);font-size:9px}
+.ly .x{color:var(--faint);font-size:9px}
+/* the HIDE/SHOW toggle carries the row's margin-left:auto, so it and the
+   #id sit together at the right edge. Like the font row's remove button
+   it only appears on hover — except on a hidden row, where SHOW is the
+   way back and has to stay findable. */
+.ly .lv{margin-left:auto;color:var(--faint);font-size:9px;letter-spacing:.1em;opacity:0}
+.ly:hover .lv{opacity:1}
+.ly .lv:hover{color:var(--ink)}
+.ly.off{color:var(--faint)}
+.ly.off .t{text-decoration:line-through}
+.ly.off .lv{opacity:1}
+.ly.off .ch{opacity:.35}
 
 #status{position:fixed;left:0;right:0;bottom:0;height:var(--stat);background:var(--chrome);
   border-top:1px solid var(--hair);display:flex;align-items:center;gap:15px;padding:0 14px;
@@ -767,6 +778,12 @@ const blendAttr = o => (o.blend && o.blend !== 'normal')
   ? ` style="mix-blend-mode:${o.blend};isolation:isolate"` : '';
 
 function shapeSVG(o){
+  /* a hidden layer is left out of the SVG entirely rather than made
+     transparent: nothing to render is also nothing to click, nothing to
+     hit-test text against, and nothing to serialise — so hiding keeps it
+     out of the exports and the saved file's artwork for free, while the
+     object itself stays in doc, in the stack, and in undo */
+  if(o.hidden) return '';
   if(o.type === 'group')
     return `<g class="o" data-id="${o.id}"${opAttr(o)}${blendAttr(o)} transform="${groupTransform(o)}">${o.children.map(shapeSVG).join('')}</g>`;
   const b = box(o), t = rotAttr(o);
@@ -915,8 +932,14 @@ function renderSVG(){
     `<defs>${gradDefsSVG()}<clipPath id="artboard-clip"><rect width="${doc.w}" height="${doc.h}"/></clipPath></defs>` +
     `<g id="art" clip-path="url(#artboard-clip)">` +
       `<rect id="bg" width="${doc.w}" height="${doc.h}" fill="${bg().hex}"/>` +
-      `<g id="gridlines" fill="#ff2e88" fill-opacity=".16">${gridSVG()}</g>` +
       doc.objects.map(shapeSVG).join('') +
+      /* the grid paints over the artwork, not under it: a full-bleed
+         image or a rect covering the artboard would otherwise hide the
+         very lines you are lining it up against. It stays inside the
+         clip (it belongs to the artboard) and stays out of hit-testing
+         (see #gridlines in the stylesheet) so clicks still reach the
+         shapes underneath it. */
+      `<g id="gridlines" fill="#ff2e88" fill-opacity=".16">${gridSVG()}</g>` +
     `</g>` +
     `<g id="guides">${guidesSVG()}</g>` +
     `<g id="handles"></g>` +
@@ -1018,6 +1041,7 @@ function marks(){
   if(!document.body.classList.contains('edit')) return;
   if(sel.length > 1){
     h.innerHTML = selectedObjs().map(o0 => {
+      if(o0.hidden) return '';   /* nothing drawn there to outline */
       const o = displayObj(o0), b = localBox(o); if(!(b.w > 0) || !(b.h > 0)) return '';
       return `<g${rotAttr(o)}>
         <rect class="sel-o" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}"/>
@@ -1027,7 +1051,7 @@ function marks(){
     return;
   }
   const o0 = cur();
-  if(!o0) return;
+  if(!o0 || o0.hidden) return;   /* selected from the layer list, but nothing on the artboard to frame */
   const o = displayObj(o0);
   /* a line has no area, so it gets its own 2-endpoint handles instead of
      the generic 4-corner box + rotate dot — dragging an end already
@@ -1339,9 +1363,10 @@ function docPanel(){
   }
   if(tab === 'layers'){
     const row = (o, parent) => `
-      <button class="ly ${sel.includes(o.id)?'on':''}" draggable="true" data-pick="${o.id}"${parent!=null ? ` data-parent="${parent}" style="padding-left:26px"` : ''}>
+      <button class="ly ${sel.includes(o.id)?'on':''}${o.hidden?' off':''}" draggable="true" data-pick="${o.id}"${parent!=null ? ` data-parent="${parent}" style="padding-left:26px"` : ''}>
         <span class="ch" style="${o.type==='group'||o.type==='image' ? 'background:transparent;box-shadow:inset 0 0 0 1px var(--hair)' : `background:${fillCSS(o.fill)}`}"></span>
         <span class="t">${o.type === 'group' ? 'group' : o.type === 'text' ? esc(o.str.split('\n')[0].slice(0,18)) : o.type}</span>
+        <span class="lv" data-vis="${o.id}" title="${o.hidden ? 'Show this layer again' : 'Hide this layer — it stays in the document but stops rendering, and stops exporting'}">${o.hidden ? 'SHOW' : 'HIDE'}</span>
         <span class="x">#${o.id}</span>
       </button>`;
     const layers = [...doc.objects].reverse().map(o =>
@@ -1601,6 +1626,10 @@ function wire(){
     i.oninput = () => { doc.palette.find(p => p.id === i.dataset.edit).hex = i.value; liveEdit(); };
   });
   $$('#panel .ly[data-pick]').forEach(b => b.onclick = e => {
+    /* the HIDE/SHOW toggle lives inside the row button (a nested <button>
+       would be invalid markup), so catch it before the row acts on it */
+    const v = e.target.closest('[data-vis]');
+    if(v){ toggleHidden(+v.dataset.vis); return; }
     const id = +b.dataset.pick;
     const parent = b.dataset.parent ? +b.dataset.parent : null;
     if(e.shiftKey && parent === entered){
@@ -1608,7 +1637,14 @@ function wire(){
     } else {
       entered = parent; sel = [id];
     }
-    tab = 'selection'; full();
+    /* a single click selects and leaves you in the list — picking through
+       a stack shouldn't yank the panel away from you every time. Double
+       click means "now show me this one", so it opens the object's tab.
+       Read off the click count rather than a dblclick listener: selecting
+       rebuilds the panel, and the row element the first click landed on
+       no longer exists by the time the second one arrives. */
+    if(e.detail > 1) tab = 'selection';
+    full();
   });
   /* drag a layer row onto another to reorder — restricted to the same list
      (top-level siblings, or one group's children) since moving an object
@@ -1835,6 +1871,7 @@ addEventListener('pointermove', e => {
       by0 = Math.min(...pts.map(q=>q.y)); by1 = Math.max(...pts.map(q=>q.y));
     }
     const hit = activeList().filter(o => {
+      if(o.hidden) return false;   /* rubber-banding sweeps up what you can see */
       const b = localBox(o);
       return b.x < bx1 && b.x + b.w > bx0 && b.y < by1 && b.y + b.h > by0;
     }).map(o => o.id);
@@ -2039,6 +2076,27 @@ function del(){
   const list = activeList(), kept = list.filter(o => !sel.includes(o.id));
   list.length = 0; list.push(...kept);
   sel = []; touch();
+}
+/* Hiding takes a layer out of the render, which also takes it out of
+   everything downstream of the render — clicking, exporting, snapping to
+   what you can see. Deselecting it on the way out is the part that isn't
+   automatic: leaving it selected would float a set of handles over a gap
+   where nothing is drawn any more. Unhiding doesn't reselect it — you
+   asked to see it, not to start editing it. */
+function toggleHidden(id){
+  const o = allObjects().find(o => o.id === id); if(!o) return;
+  commit();
+  o.hidden = !o.hidden || undefined;   /* undefined so a visible object carries no key at all */
+  if(o.hidden){
+    sel = sel.filter(s => s !== id);
+    if(o.type === 'group'){
+      const kids = o.children.map(c => c.id);
+      sel = sel.filter(s => !kids.includes(s));
+      if(entered === id) entered = null;
+    }
+  }
+  touch();
+  flash(o.hidden ? 'layer hidden — it won\'t render or export' : 'layer shown');
 }
 /* ── grouping ────────────────────────────────────────────────────────
    One level deep: a group holds ordinary objects, never another group.
@@ -2824,7 +2882,11 @@ $('#stage').addEventListener('pointerdown', e => {
    deltaX before the event reaches us. Holding Space and dragging pans
    too, for anyone without a wheel/trackpad handy — the classic "hand
    tool". */
-const ZOOM_MIN = .2, ZOOM_MAX = 8;
+/* 32x is close-enough-to-count-pixels on a 1200px artboard — roughly one
+   document unit per 15 screen px. Going further stops being useful: the
+   overlay chrome is held at a fixed screen size (see hUnit) so at some
+   point the handles are larger than what they are framing. */
+const ZOOM_MIN = .2, ZOOM_MAX = 32;
 function setZoom(z, cx, cy){
   zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
   const board = $('#board');

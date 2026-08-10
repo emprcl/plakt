@@ -61,6 +61,14 @@ test.describe('zoom and pan', () => {
     expect(await getPan(page)).toEqual({ x: 0, y: 0 });
   });
 
+  test('zoom goes far enough in to work at pixel level', async ({ page }) => {
+    expect(await page.evaluate(() => ZOOM_MAX)).toBeGreaterThanOrEqual(32);
+    await page.evaluate(() => setZoom(1e6));
+    expect(await getZoom(page)).toBe(await page.evaluate(() => ZOOM_MAX));  // clamped, not unbounded
+    await page.evaluate(() => setZoom(0));
+    expect(await getZoom(page)).toBe(await page.evaluate(() => ZOOM_MIN));
+  });
+
   /* the artboard used to be losable: pan far enough and it left the
      stage completely, with nothing on screen to grab it back by */
   test('panning can never push the artboard off screen', async ({ page }) => {
@@ -112,7 +120,7 @@ test.describe('zoom and pan', () => {
     const at1 = await chromeSizes(page);
     expect(at1.handle).toBeGreaterThan(4);   // guards against the whole thing measuring ~0
 
-    for (const z of [0.3, 2, 4, 8]) {
+    for (const z of [0.3, 2, 4, 8, 32]) {
       await page.evaluate(zz => setZoom(zz), z);
       expect(await getZoom(page)).toBe(z);
       // ±0.5px of slack for the sub-pixel rounding in the board's layout
