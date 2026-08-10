@@ -202,12 +202,34 @@ input[type=color]{position:absolute;opacity:0;width:1px;height:1px;pointer-event
   color:var(--faint);letter-spacing:.05em;font-size:10px;transform:translateY(12px)}
 body.edit #status{transform:none}
 #status .fn{color:var(--ink)}
+#fname{background:none;border:1px solid transparent;font:inherit;letter-spacing:inherit;
+  color:var(--ink);padding:2px 4px;margin:0 -4px;cursor:text}
+#fname:hover{border-color:var(--hair)}
+#fname:focus{outline:none;border-color:var(--dim);background:var(--chrome2);cursor:text}
 #dirty{color:#fff}
 #status .rt{margin-left:auto;display:flex;gap:15px;align-items:center}
 #status b{font-weight:400;color:var(--dim)}
 #status .brand{gap:7px;align-items:baseline;color:var(--ink);letter-spacing:.22em;
   text-transform:lowercase;font-weight:500}
 #status .ver{color:var(--faint);font-size:9px;letter-spacing:.08em;font-weight:400}
+/* the button reads as a segment carved out of the bar itself, not a
+   floating pill: it spans the bar's full height flush to its left edge,
+   so the bar's own top/bottom borders double as the button's — the only
+   border the button draws itself is the right-hand divider */
+.fmwrap{position:relative;align-self:stretch;margin-left:-14px}
+#fileMenuBtn{height:100%;background:var(--chrome2);color:var(--ink);border:0;
+  border-right:1px solid var(--hair);padding:0 14px;letter-spacing:.1em;
+  font-size:10px;cursor:pointer}
+#fileMenuBtn:hover{background:var(--chrome)}
+#fileMenuBtn.open{background:var(--ink);color:var(--chrome)}
+#fileMenu{position:absolute;left:0;bottom:100%;margin-bottom:10px;background:var(--chrome2);
+  border:1px solid var(--hair);box-shadow:0 8px 24px rgba(0,0,0,.5);min-width:200px;
+  display:none;flex-direction:column;padding:4px 0;z-index:10}
+#fileMenu.open{display:flex}
+#fileMenu button{text-align:left;padding:8px 14px;color:var(--dim);letter-spacing:.06em;
+  font-size:11px;white-space:nowrap}
+#fileMenu button:hover{background:var(--chrome);color:var(--ink)}
+.fm-sep{height:1px;background:var(--hair);margin:4px 0}
 
 #cmdk{position:fixed;inset:0;background:rgba(8,8,8,.45);display:none;justify-content:center;
   align-items:flex-start;padding-top:14vh;z-index:50}
@@ -324,7 +346,27 @@ body.edit #status{transform:none}
 <aside id="panel" class="cr"></aside>
 
 <footer id="status" class="cr">
-  <span class="fn" id="fname">untitled</span>
+  <div class="fmwrap">
+    <button id="fileMenuBtn" title="Save, export and file options">SAVE ▾</button>
+    <div id="fileMenu">
+      <button data-fm="save" title="Write the document back into the file you opened or last saved — asks where to save the first time.">Save</button>
+      <button data-fm="open" title="Pick a plakt file to load. Save then writes back into it directly, with no dialog.">Open…</button>
+      <button data-fm="saveCopy" title="Save a duplicate to a new file, without changing what Save writes to.">Save as copy</button>
+      <button data-fm="replace" title="Replace this document with the contents of a plakt JSON file.">Replace from JSON…</button>
+      <div class="fm-sep"></div>
+      <button data-fm="copyJson" title="Copy the document's raw JSON to the clipboard — the same format Replace from JSON reads.">Copy JSON</button>
+      <button data-fm="copySvg" title="Copy the artboard as standalone SVG markup to the clipboard.">Copy SVG</button>
+      <div class="fm-sep"></div>
+      <button data-fm="exportSvg" title="Download the artboard as a standalone SVG file.">Export SVG</button>
+      <button data-fm="exportPng1" title="Download the artboard as a PNG, at the document's own resolution.">Export PNG @1x</button>
+      <button data-fm="exportPng2" title="Download the artboard as a PNG at twice the document's resolution.">Export PNG @2x</button>
+      <button data-fm="exportPng4" title="Download the artboard as a PNG at four times the document's resolution.">Export PNG @4x</button>
+      <div class="fm-sep"></div>
+      <button data-fm="new" title="Discard this document and start over from a blank artboard.">New</button>
+    </div>
+    <input type="file" accept=".json,application/json" id="jsonInput" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);border:0">
+  </div>
+  <input class="fn" id="fname" value="untitled" title="Click to rename" spellcheck="false" autocomplete="off">
   <span id="dirty"></span>
   <span id="msg">nothing selected</span>
   <span class="rt brand">plakt<span class="ver" id="ver"></span></span>
@@ -2171,6 +2213,82 @@ async function openFile(){
     flash('could not open that file — is it a plakt export?');
   }
 }
+/* writes a duplicate file without touching what save() targets — the
+   currently-open file (its handle, its name) stays exactly what it was,
+   so ⌘S right after this still goes back into the original, not the copy */
+async function saveAsCopy(){
+  const html = serialize();
+  if(CAN_WRITE){
+    try{
+      const h = await showSaveFilePicker({
+        suggestedName: slug() + '-copy.html',
+        types:[{description:'Plakt', accept:{'text/html':['.html']}}]
+      });
+      const w = await h.createWritable();
+      await w.write(html); await w.close();
+      flash('saved a copy to ' + h.name);
+      return;
+    }catch(err){
+      if(err.name === 'AbortError') return;
+      flash('could not write a copy — downloading instead');
+    }
+  }
+  download(html, slug() + '-copy.html', 'text/html');
+}
+/* JSON, not SVG, is the source format for replacing a document: it's
+   exactly doc's own shape (the same thing already embedded as doc-data in
+   every saved file), so loading it back is a plain JSON.parse with no
+   interpretation needed. An exported SVG is lossy in the other direction
+   — rotation is baked into a transform, fills are resolved to flat hex,
+   text is baked into <tspan>s — there's no reliable way back from that
+   into doc's model, so SVG stays an export-only format. */
+function replaceFromJSON(){ $('#jsonInput').click(); }
+function loadJSONFile(file){
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    let loaded;
+    try{ loaded = JSON.parse(reader.result); }
+    catch(e){ return flash('not valid JSON'); }
+    if(!loaded || !Array.isArray(loaded.objects) || !Array.isArray(loaded.palette))
+      return flash("that JSON doesn't look like a plakt document");
+    commit();
+    doc = loaded;
+    sel = []; entered = null; touch();
+    flash('replaced from ' + file.name);
+  };
+  reader.readAsText(file);
+}
+async function copyToClipboard(text, kind, ext, type){
+  try{
+    await navigator.clipboard.writeText(text);
+    flash('copied ' + kind + ' to clipboard');
+  }catch(err){
+    download(text, slug() + ext, type);
+    flash('clipboard unavailable — downloaded ' + kind + ' instead');
+  }
+}
+const copyJSON    = () => copyToClipboard(JSON.stringify(doc, null, 1), 'JSON', '.json', 'application/json');
+const copySVGText = () => copyToClipboard(standaloneSVG(), 'SVG', '.svg', 'image/svg+xml');
+/* a blank document, not just an empty artboard — palette, grid, guides
+   and the save handle all reset too, so a later ⌘S prompts fresh instead
+   of silently overwriting whatever file happened to be open before */
+function newDoc(){
+  if(dirty && !confirm('Discard unsaved changes and start a new plakt?')) return;
+  doc = {
+    name: 'untitled', w: 1200, h: 1600, cols: 1, rows: 1, gap: 20, margin: 20,
+    webfonts: [], guides: { v: [], h: [] },
+    palette: [
+      {id:'BG',hex:'#e6e1d7'}, {id:'INK',hex:'#141210'}, {id:'RED',hex:'#d3311c'},
+      {id:'YEL',hex:'#efb700'}, {id:'BLU',hex:'#1a4f9c'}
+    ],
+    objects: []
+  };
+  handle = null; sel = []; entered = null; undoS = []; redoS = []; dirty = false;
+  resetView();
+  touch();
+  flash('new plakt');
+}
 function download(data, name, type){
   saveURL(URL.createObjectURL(data instanceof Blob ? data : new Blob([data], {type})), name);
 }
@@ -2247,7 +2365,12 @@ function mode(on){
 }
 function status(){
   $('#dirty').textContent = dirty ? '●' : '';
-  $('#fname').textContent = doc.name;
+  const fn = $('#fname');
+  if(document.activeElement !== fn) fn.value = doc.name;   /* don't fight active typing */
+  /* border-box sizing eats padding/border out of a ch-based width, and the
+     bar's own letter-spacing widens each glyph beyond 1ch — pad generously
+     so the name never clips */
+  fn.style.width = Math.max(6, doc.name.length + 4) + 'ch';
 }
 let ft;
 function flash(m){ $('#msg').textContent = m; clearTimeout(ft); ft = setTimeout(sync, 2200); }
@@ -2294,7 +2417,7 @@ const CMDS = [
   {n:'Undo',             k:'⌘Z', f:undo},
   {n:'Redo',             k:'⇧⌘Z',f:redo},
   {n:'Add palette swatch', k:'', f:addSwatch},
-  {n:'Rename plakt',     k:'',   f:()=>{ sel=[]; tab='artboard'; panel(); const i=$('#docname'); if(i){i.focus();i.select();} }},
+  {n:'Rename plakt',     k:'',   f:()=>$('#fname').focus()},
   {n:'Clear artboard',   k:'',   f:()=>{commit();doc.objects=[];sel=[];entered=null;touch()}},
   {n:'Export PNG @1x',   k:'',   f:()=>exportPNG(1)},
   {n:'Export PNG @2x',   k:'',   f:()=>exportPNG(2)},
@@ -2302,6 +2425,11 @@ const CMDS = [
   {n:'Export SVG',       k:'',   f:exportSVG},
   {n:'Save',             k:'⌘S', f:save},
   {n:'Open…',            k:'⌘O', f:openFile},
+  {n:'Save as copy',     k:'',   f:saveAsCopy},
+  {n:'Replace from JSON', k:'',  f:replaceFromJSON},
+  {n:'Copy JSON',        k:'',   f:copyJSON},
+  {n:'Copy SVG',         k:'',   f:copySVGText},
+  {n:'New',              k:'',   f:newDoc},
   {n:'Reset zoom/pan',   k:'⌘0', f:resetView},
   {n:'Enter edit mode',  k:'E',  f:()=>mode(true)},
   {n:'Leave edit mode',  k:'ESC',f:()=>mode(false)}
@@ -2384,6 +2512,26 @@ $('#t-view').onclick = () => mode(false);
 $('#editBtn').onclick = () => mode(true);
 $('#t-undo').onclick = undo;
 $('#t-snap').onclick = () => { snap = !snap; syncSnapUI(); panel(); };
+/* ── artboard name, clickable right in the status bar ───────────────
+   a static top-level input, unlike the panel's own #docname field which
+   gets rebuilt on every panel() call — wired once here instead */
+$('#fname').addEventListener('focus', () => $('#fname').select());
+$('#fname').addEventListener('change', () => { commit(); doc.name = $('#fname').value.trim() || 'untitled'; touch(); });
+$('#fname').addEventListener('keydown', e => { if(e.key === 'Enter') $('#fname').blur(); });
+/* ── file menu ───────────────────────────────────────────────────── */
+const fileMenuSet = open => {
+  $('#fileMenu').classList.toggle('open', open);
+  $('#fileMenuBtn').classList.toggle('open', open);
+};
+$('#fileMenuBtn').onclick = e => { e.stopPropagation(); fileMenuSet(!$('#fileMenu').classList.contains('open')); };
+document.addEventListener('click', e => { if(!e.target.closest('.fmwrap')) fileMenuSet(false); });
+const FILE_MENU_ACTIONS = {
+  save: save, open: openFile, saveCopy: saveAsCopy, replace: replaceFromJSON,
+  copyJson: copyJSON, copySvg: copySVGText, new: newDoc,
+  exportSvg: exportSVG, exportPng1: () => exportPNG(1), exportPng2: () => exportPNG(2), exportPng4: () => exportPNG(4)
+};
+$$('#fileMenu [data-fm]').forEach(b => b.onclick = () => { fileMenuSet(false); FILE_MENU_ACTIONS[b.dataset.fm](); });
+$('#jsonInput').onchange = () => { loadJSONFile($('#jsonInput').files[0]); $('#jsonInput').value = ''; };
 $('#stage').addEventListener('dblclick', () => { if(!document.body.classList.contains('edit')) mode(true); });
 /* click the stage margin — anywhere off the artboard — to clear the selection */
 $('#stage').addEventListener('pointerdown', e => {

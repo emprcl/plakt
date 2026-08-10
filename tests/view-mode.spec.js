@@ -20,7 +20,12 @@ test.describe('view mode EDIT button', () => {
     await expect(page.locator('body')).toHaveClass(/edit/);
 
     const btn = page.locator('#editBtn');
-    expect(await btn.evaluate(el => getComputedStyle(el).opacity)).toBe('0');
+    // opacity fades via a CSS transition — read pointer-events (an instant
+    // discrete swap, not animated) for the real signal, and wait out the
+    // transition before checking opacity's end value
     expect(await btn.evaluate(el => getComputedStyle(el).pointerEvents)).toBe('none');
+    await expect(async () => {
+      expect(await btn.evaluate(el => getComputedStyle(el).opacity)).toBe('0');
+    }).toPass({ timeout: 1000 });
   });
 });
