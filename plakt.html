@@ -61,9 +61,17 @@ body.edit #board{height:min(78vh,820px)}
 #board svg{display:block;width:100%;height:100%;user-select:none;touch-action:none}
 #guides{opacity:0;pointer-events:none;transition:opacity var(--t)}
 body.edit.grid #guides{opacity:1;pointer-events:auto}
-.gd{stroke:#12b8d8;stroke-width:1;vector-effect:non-scaling-stroke;pointer-events:none}
-.gd.hot{stroke:#fff;stroke-width:2}
-.gh{stroke:#000;stroke-opacity:0;stroke-width:11;vector-effect:non-scaling-stroke;pointer-events:stroke;cursor:grab}
+/* Editor chrome drawn over the artboard — guides, selection, handles,
+   marquee — is measured in screen pixels, not document units: at 4× a
+   3px selection border would paint as 12px and bury the artwork it's
+   meant to frame. vector-effect:non-scaling-stroke alone only undoes the
+   viewBox scale, not #board's CSS scale(--zoom), so every such width is
+   also divided by --zoom to come out the same size on screen at any
+   zoom. Handle geometry (which is real SVG geometry, not stroke) gets
+   the same treatment in JS — see hUnit(). */
+.gd{stroke:#12b8d8;stroke-width:calc(1px/var(--zoom,1));vector-effect:non-scaling-stroke;pointer-events:none}
+.gd.hot{stroke:#fff;stroke-width:calc(2px/var(--zoom,1))}
+.gh{stroke:#000;stroke-opacity:0;stroke-width:calc(11px/var(--zoom,1));vector-effect:non-scaling-stroke;pointer-events:stroke;cursor:grab}
 .rul{position:absolute;background:var(--chrome);opacity:0;transition:opacity var(--t)}
 body.edit.grid .rul{opacity:1}
 .rul:hover{background:#2a2a28}
@@ -71,12 +79,12 @@ body.edit.grid .rul{opacity:1}
 #rulL{top:0;bottom:0;left:-13px;width:12px;cursor:col-resize}
 #gridlines{opacity:0;transition:opacity var(--t)}
 body.edit.grid #gridlines{opacity:1}
-.sel-o{fill:none;stroke:#fff;stroke-width:3;vector-effect:non-scaling-stroke;opacity:.45;pointer-events:none}
-.sel-i{fill:none;stroke:#000;stroke-width:1;vector-effect:non-scaling-stroke;pointer-events:none}
-.hd{fill:#fff;stroke:#000;stroke-width:1;vector-effect:non-scaling-stroke}
+.sel-o{fill:none;stroke:#fff;stroke-width:calc(3px/var(--zoom,1));vector-effect:non-scaling-stroke;opacity:.45;pointer-events:none}
+.sel-i{fill:none;stroke:#000;stroke-width:calc(1px/var(--zoom,1));vector-effect:non-scaling-stroke;pointer-events:none}
+.hd{fill:#fff;stroke:#000;stroke-width:calc(1px/var(--zoom,1));vector-effect:non-scaling-stroke}
 .hd:hover{fill:#000;stroke:#fff}
-.hd-l{stroke:#000;stroke-width:1;vector-effect:non-scaling-stroke;pointer-events:none}
-#marquee rect{fill:rgba(255,255,255,.1);stroke:#fff;stroke-width:1;vector-effect:non-scaling-stroke;pointer-events:none}
+.hd-l{stroke:#000;stroke-width:calc(1px/var(--zoom,1));vector-effect:non-scaling-stroke;pointer-events:none}
+#marquee rect{fill:rgba(255,255,255,.1);stroke:#fff;stroke-width:calc(1px/var(--zoom,1));vector-effect:non-scaling-stroke;pointer-events:none}
 body.edit .o{cursor:move}
 body.space #stage{cursor:grab}
 body.space .o{cursor:grab}
@@ -563,6 +571,11 @@ const snapH = y => { let best = SNAPTOL(), hit = y; snapLinesH().forEach(g => { 
 /* nearest line unconditionally — for the "snap selection to grid" command */
 const nearest = (arr, v) => arr.reduce((a,b) => Math.abs(b-v) < Math.abs(a-v) ? b : a, v);
 const unit = () => Math.max(doc.w, doc.h)/70;      // handle size in doc units
+/* the same unit held constant on screen: #board is CSS-scaled by --zoom,
+   so anything meant to stay a fixed size to the eye has to shrink in doc
+   units by exactly that much. Everything marks() draws uses this — see
+   the note by .gd in the stylesheet for the stroke-width half of it. */
+const hUnit = () => unit()/zoom;
 
 /* ── colour ──────────────────────────────────────────────────────────
    Slot ids are just labels — nothing in the code depends on a name. Two
@@ -956,7 +969,7 @@ function marks(){
      re-angles it, so there's nothing left for a separate rotate handle
      to do (see the 'lineEnd' pointermove branch) */
   if(o.type === 'line'){
-    const b = box(o), t = rotAttr(o), s = unit()*0.5;
+    const b = box(o), t = rotAttr(o), s = hUnit()*0.5;
     const x1 = b.x, y1 = b.y, x2 = b.x+b.w, y2 = b.y+b.h;
     h.innerHTML = `<g${t}>
       <line class="sel-o" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>
@@ -968,7 +981,7 @@ function marks(){
   }
   const b = localBox(o);
   if(!(b.w > 0) || !(b.h > 0)) return;
-  const t = rotAttr(o), u = unit(), s = u*0.6;
+  const t = rotAttr(o), u = hUnit(), s = u*0.6;
   const cs = [['nw',b.x,b.y],['ne',b.x+b.w,b.y],['se',b.x+b.w,b.y+b.h],['sw',b.x,b.y+b.h]];
   const rx = b.x + b.w/2, ry = b.y - u*2.2;
   h.innerHTML = `<g${t}>
@@ -2213,6 +2226,15 @@ function serialize(){
   renderSVG();
   const c = document.documentElement.cloneNode(true);
   c.querySelector('#handles').innerHTML = '';
+  /* zoom/pan are how *you* are looking at the artboard right now, not
+     part of the document — a plakt you send someone should open framed.
+     Stripping them also keeps --zoom (which the overlay chrome divides
+     its widths by, see .gd) in step with the JS `zoom`, which always
+     boots at 1: a baked-in --zoom would leave the two disagreeing and
+     every handle and hairline mis-sized on open. --ar stays; that one
+     is the artboard's real shape. */
+  const bd = c.querySelector('#board');
+  ['--zoom','--panx','--pany','transform-origin'].forEach(p => bd.style.removeProperty(p));
   c.querySelector('body').className = document.body.classList.contains('grid') ? 'grid' : '';
   c.querySelector('#panel').innerHTML = '';
   c.querySelector('#cmdlist').innerHTML = '';
@@ -2684,6 +2706,10 @@ function setZoom(z, cx, cy){
     board.style.transformOrigin = `${(cx-r.left)/r.width*100}% ${(cy-r.top)/r.height*100}%`;
   }
   board.style.setProperty('--zoom', zoom);
+  /* stroke widths track --zoom on their own through calc(), but handle
+     geometry is baked into the markup by marks() — redraw it so the
+     handles resize with the new zoom instead of at the old one's scale */
+  marks();
 }
 function applyPan(){
   $('#board').style.setProperty('--panx', panX + 'px');
