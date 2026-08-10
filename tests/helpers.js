@@ -1,8 +1,15 @@
 const { expect } = require('@playwright/test');
 
 /* Open plakt.html and enter edit mode ('e') — almost everything (drawing,
-   selecting, dragging) only responds while body has the 'edit' class. */
+   selecting, dragging) only responds while body has the 'edit' class.
+   file:// localStorage isn't reliably isolated per test context, and every
+   fresh doc defaults to the same name ("untitled") — plakt's own boot
+   sequence resumes from the newest local version for that name if one
+   exists, so a leftover version from an earlier test could silently swap
+   in a different document here. Clear it via addInitScript, which runs
+   before the page's own script does, so nothing is left for boot to find. */
 async function openApp(page) {
+  await page.addInitScript(() => localStorage.clear());
   await page.goto('plakt.html');
   await expect(page.locator('#doc-svg')).toBeVisible();
   await page.keyboard.press('e');

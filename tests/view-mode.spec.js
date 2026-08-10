@@ -2,6 +2,7 @@ const { test, expect } = require('@playwright/test');
 
 test.describe('view mode EDIT button', () => {
   test('is visible on load (before entering edit mode) and clicking it enters edit mode', async ({ page }) => {
+    await page.addInitScript(() => localStorage.clear()); // avoid boot resuming a leftover version from another test
     await page.goto('plakt.html');
     await expect(page.locator('#doc-svg')).toBeVisible();
     await expect(page.locator('body')).not.toHaveClass(/edit/);
@@ -15,6 +16,7 @@ test.describe('view mode EDIT button', () => {
   });
 
   test('fades out and stops being clickable once in edit mode', async ({ page }) => {
+    await page.addInitScript(() => localStorage.clear()); // avoid boot resuming a leftover version from another test
     await page.goto('plakt.html');
     await page.keyboard.press('e');
     await expect(page.locator('body')).toHaveClass(/edit/);

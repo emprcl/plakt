@@ -108,8 +108,9 @@ body.edit #rail{transform:none}
 body.edit #panel{transform:none}
 .sec{border-bottom:1px solid var(--hair);padding:12px 15px}
 .tabs{display:flex;border-bottom:1px solid var(--hair);position:sticky;top:0;background:var(--chrome);z-index:2}
-.tab{flex:1;padding:11px 14px;color:var(--faint);letter-spacing:.16em;font-size:9px;
-  text-transform:uppercase;border-bottom:1px solid transparent;transition:color 90ms}
+.tab{flex:1;min-width:0;padding:11px 6px;color:var(--faint);letter-spacing:.08em;font-size:9px;
+  text-transform:uppercase;border-bottom:1px solid transparent;transition:color 90ms;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tab:hover{color:var(--dim)}
 .tab.on{color:var(--ink);border-bottom-color:var(--ink)}
 .tab em{font-style:normal;color:var(--faint)}
@@ -175,6 +176,15 @@ body.edit #panel{transform:none}
 .sw .nm{letter-spacing:.12em;color:var(--dim)}
 .sw.on .nm{color:var(--ink)}
 .sw .ct{margin-left:auto;color:var(--faint);font-size:10px}
+.vrow{display:flex;align-items:center;gap:9px;padding:6px;margin:0 -6px;width:calc(100% + 12px)}
+.vrow:hover{background:var(--chrome2)}
+.vrow .vd{display:flex;flex-direction:column;gap:2px;min-width:0}
+.vrow .vdate{color:var(--dim);letter-spacing:.06em;font-size:11px}
+.vrow .vmeta{color:var(--faint);font-size:9px;letter-spacing:.08em}
+.vrow .va{margin-left:auto;display:flex;align-items:center;gap:4px;flex:none}
+.verx{color:var(--faint);padding:0 4px;font-size:13px;line-height:1;opacity:0}
+.vrow:hover .verx{opacity:1}
+.verx:hover{color:#fff}
 input[type=color]{position:absolute;opacity:0;width:1px;height:1px;pointer-events:none;border:0;padding:0}
 .ch{position:relative;display:inline-block;overflow:hidden}
 .tints{display:flex;gap:3px;margin-top:9px;margin-bottom:16px}
@@ -460,6 +470,7 @@ let entered = null;   // id of the group the user has double-clicked into, or nu
 let lastClick = { id: null, t: 0 };   // hand-rolled double-click detection, see the pointerdown handler
 let panX    = 0, panY = 0, spaceDown = false;
 let undoS   = [], redoS = [];
+let versionTimer = null;   // debounces automatic version capture — see touch()
 const svgEl = $('#doc-svg');
 const CAN_WRITE = 'showSaveFilePicker' in window;
 const nextId = () => allObjects().reduce((m,o) => Math.max(m,o.id), 0) + 1;
@@ -975,7 +986,15 @@ function marks(){
    move/delete/duplicate instead (see selectedObjs()) */
 const cur  = () => sel.length === 1 ? allObjects().find(o => o.id === sel[0]) || null : null;
 const full = () => { renderSVG(); panel(); status(); };
-const touch = () => { dirty = true; full(); };
+const touch = () => {
+  dirty = true; full();
+  /* auto-capture a version on every modification, debounced: each touch()
+     postpones the capture rather than firing one, so a burst of edits (a
+     drag, a run of keystrokes) settles into a single snapshot once things
+     go quiet, instead of one per change */
+  clearTimeout(versionTimer);
+  versionTimer = setTimeout(captureVersion, VERSION_DEBOUNCE);
+};
 
 /* ════════════════════════════════════════════════════════════════════
    PANEL
@@ -1193,6 +1212,25 @@ function objPanel(o){
 let tab = 'artboard';
 
 function docPanel(){
+  if(tab === 'versions'){
+    const list = listVersions();
+    const rows = list.map(v => `
+      <div class="vrow">
+        <div class="vd">
+          <span class="vdate">${formatVersionDate(v.ts)}</span>
+          <span class="vmeta">${v.objects} object${v.objects===1?'':'s'}</span>
+        </div>
+        <div class="va">
+          <button class="alb" data-restore="${v.id}" style="width:auto;padding:4px 8px" title="Replace the current document with this version — you can still undo afterward">RESTORE</button>
+          <button class="verx" data-delver="${v.id}" title="Delete this version — this cannot be undone">×</button>
+        </div>
+      </div>`).join('') || '<div class="tip" style="margin:0">no saved versions yet</div>';
+    return `<div class="sec" style="border:0">
+      ${secHead('Versions', "a snapshot is kept automatically a few seconds after each change settles — local storage only, never part of the saved file itself",
+        `<em>${list.length}</em>`)}
+      ${rows}
+    </div>`;
+  }
   if(tab === 'layers'){
     const row = (o, parent) => `
       <button class="ly ${sel.includes(o.id)?'on':''}" draggable="true" data-pick="${o.id}"${parent!=null ? ` data-parent="${parent}" style="padding-left:26px"` : ''}>
@@ -1249,6 +1287,7 @@ function tabsHTML(o, multi){
     ${o ? t('selection', o.type) : multi ? t('selection', 'Selection', sel.length) : ''}
     ${t('artboard','Artboard')}
     ${t('layers','Layers', doc.objects.length)}
+    ${t('versions','Versions', listVersions().length)}
   </div>`;
 }
 /* shown instead of objPanel() while more than one object is selected —
@@ -1534,6 +1573,8 @@ function wire(){
   if(ga) ga.onclick = submit;
   $$('#panel .fx[data-rm]').forEach(b => b.onclick = () => removeWebfont(b.dataset.rm));
   const as = $('#addSw'); if(as) as.onclick = addSwatch;
+  $$('#panel [data-restore]').forEach(b => b.onclick = () => restoreVersion(+b.dataset.restore));
+  $$('#panel [data-delver]').forEach(b => b.onclick = () => { if(confirm('Delete this version? This cannot be undone.')) deleteVersion(+b.dataset.delver); });
   const fk = $('#forkSw');
   if(fk) fk.onclick = () => {                       /* fork a private swatch for this object */
     commit();
@@ -2177,7 +2218,7 @@ async function save(){
       const w = await handle.createWritable();
       await w.write(html); await w.close();
       doc.name = handle.name.replace(/\.html$/,'');
-      dirty = false; status(); flash('written back into ' + handle.name);
+      dirty = false; captureVersion(); status(); flash('written back into ' + handle.name);
       return;
     }catch(err){
       if(err.name === 'AbortError') return;
@@ -2185,7 +2226,7 @@ async function save(){
     }
   }
   download(html, slug() + '.html', 'text/html');
-  dirty = false; status();
+  dirty = false; captureVersion(); status();
 }
 /* opening a file via the OS (double-click, drag onto the browser) gives the
    page no way to write back to it — the File System Access API only ever
@@ -2226,7 +2267,7 @@ async function saveAsCopy(){
       });
       const w = await h.createWritable();
       await w.write(html); await w.close();
-      flash('saved a copy to ' + h.name);
+      captureVersion(); flash('saved a copy to ' + h.name);
       return;
     }catch(err){
       if(err.name === 'AbortError') return;
@@ -2234,6 +2275,7 @@ async function saveAsCopy(){
     }
   }
   download(html, slug() + '-copy.html', 'text/html');
+  captureVersion();
 }
 /* JSON, not SVG, is the source format for replacing a document: it's
    exactly doc's own shape (the same thing already embedded as doc-data in
@@ -2287,8 +2329,70 @@ function newDoc(){
   handle = null; sel = []; entered = null; undoS = []; redoS = []; dirty = false;
   resetView();
   touch();
+  clearTimeout(versionTimer);   /* a blank artboard isn't worth a version once the debounce settles */
   flash('new plakt');
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   VERSIONS — snapshots kept in this browser's local storage only. They
+   never touch a file and never leave the machine; unlike undo/redo (which
+   resets on reload) these survive closing the tab, so they're for "I want
+   to come back to this exact state later," not for undoing a mistake.
+   Scoped per document name — plakt.html has no other durable identity for
+   "which document is this" across a reload. ═══════════════════════════ */
+const VERSION_CAP = 50;
+const VERSION_DEBOUNCE = 3000;   /* ms of inactivity before an edit-in-progress settles into a version */
+const versionsKey = () => 'plakt:versions:' + slug();
+function listVersions(){
+  try{
+    const list = JSON.parse(localStorage.getItem(versionsKey()) || '[]');
+    return Array.isArray(list) ? list : [];
+  }catch(e){ return []; }
+}
+function saveVersionsList(list){
+  try{
+    localStorage.setItem(versionsKey(), JSON.stringify(list));
+    return true;
+  }catch(e){
+    flash('could not save version — local storage is full');
+    return false;
+  }
+}
+/* called automatically — via touch()'s debounce on every edit, and
+   immediately from save()/saveAsCopy() — no manual "save version" button
+   exists. Deliberately silent (no flash, no full panel()/sync() rebuild):
+   touch() has already re-rendered everything by the time this runs, and
+   a full panel() call here would both stomp save()'s own flash message
+   (sync() overwrites #msg unconditionally) and risk blurring whatever
+   field the user had focused mid-edit. Just patch the one badge that
+   could be visibly stale. */
+function captureVersion(){
+  clearTimeout(versionTimer);   /* an explicit capture (save) preempts a pending debounced one, so they can't fire back-to-back on the same change */
+  const list = listVersions();
+  list.unshift({ id: Date.now(), ts: Date.now(), objects: doc.objects.length, doc: JSON.parse(JSON.stringify(doc)) });
+  if(list.length > VERSION_CAP) list.length = VERSION_CAP;
+  if(!saveVersionsList(list)) return;
+  const badge = document.querySelector('.tab[data-tab="versions"] em');
+  if(badge) badge.textContent = list.length;
+}
+function restoreVersion(id){
+  const v = listVersions().find(v => v.id === id);
+  if(!v) return;
+  commit();                       /* undo brings the pre-restore state right back */
+  doc = JSON.parse(JSON.stringify(v.doc));
+  sel = []; entered = null; touch();
+  flash('restored version from ' + formatVersionDate(v.ts));
+}
+function deleteVersion(id){
+  saveVersionsList(listVersions().filter(v => v.id !== id));
+  panel(); flash('version deleted');
+}
+function formatVersionDate(ts){
+  const d = new Date(ts);
+  return d.toLocaleDateString(undefined, {month:'short', day:'numeric'}) + ' ' +
+    d.toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'});
+}
+
 function download(data, name, type){
   saveURL(URL.createObjectURL(data instanceof Blob ? data : new Blob([data], {type})), name);
 }
@@ -2595,10 +2699,30 @@ $('#ver').textContent = VERSION;
 addEventListener('resize', marks);
 if(document.fonts) document.fonts.ready.then(renderSVG);
 
+/* the file only reflects the last explicit Save, but versions capture
+   every settled edit (see touch()'s debounce) — if the newest local
+   version for this doc differs from what's baked into the file, that
+   version is the truer "where I left off," so resume from it instead.
+   Comparing JSON rather than unconditionally swapping means a clean
+   save-then-reopen (the common case) doesn't flash a pointless message
+   or mark the doc dirty for no reason. */
+const bootDocJSON = JSON.stringify(doc);
+const lastVersion = listVersions()[0];
+let resumedAt = null;
+if(lastVersion && JSON.stringify(lastVersion.doc) !== bootDocJSON){
+  doc = lastVersion.doc;
+  sel = []; entered = null; dirty = true;
+  resumedAt = lastVersion.ts;
+}
+
 ensureWebfonts();
 
 /* boot in view mode — you received a plakt, not an application */
 full();
+/* flash() has to come after full() — full() calls panel(), which calls
+   sync(), which stomps #msg unconditionally, so anything flashed earlier
+   in boot would vanish before it was ever visible */
+if(resumedAt) flash('resumed unsaved changes from ' + formatVersionDate(resumedAt));
 </script>
 </body>
 </html>
