@@ -1,5 +1,7 @@
 # Plakt
 
+![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/emprcl/plakt) ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/emprcl/plakt/checks.yml)
+
 Plakt is a graphic design tool that lives entirely inside a single HTML file. There is nothing to install and nothing to build. Plakt has no server, no account, and no network requirement beyond optionally pulling in a Google Font.
 
 > Plakt is a work in progress. Consider the format stable enough to design with, but expect the feature set to keep growing.
@@ -10,7 +12,7 @@ _Feel free to [open an issue](https://github.com/emprcl/plakt/issues/new)._
 
 ## Getting started
 
-Download `plakt.html` (or clone this repository) and open the file in a modern browser. Press `E`, or double click the canvas, to enter edit mode, then start drawing.
+Try it straight away at [empr.cl/plakt](https://empr.cl/plakt/), or grab `plakt.html` from the [latest release](https://github.com/emprcl/plakt/releases/latest) and open it in a modern browser. Press `E`, or double click the canvas, to enter edit mode, then start drawing.
 
 Everything you make lives inside `doc`, the document object embedded in the page itself. Saving writes that object straight back into the HTML, so the file you opened and the file you save are the same file, just updated.
 

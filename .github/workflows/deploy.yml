@@ -34,15 +34,40 @@ jobs:
       - name: Run tests
         run: npm test
 
+  release:
+    name: release
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # stamp the tag (v1.2.3 -> 1.2.3) into the file's own version display
+      - name: Set version
+        run: sed -i "s/const VERSION = '[^']*';/const VERSION = '${GITHUB_REF_NAME#v}';/" plakt.html
+
+      - name: Create GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" plakt.html --title "$GITHUB_REF_NAME" --generate-notes
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plakt-html
+          path: plakt.html
+
   deploy:
     name: deploy
-    needs: test
+    needs: release
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: plakt-html
 
       # plakt.html is the whole app, no build step — it just needs to be
       # named index.html for Pages to serve it at the site's root.
