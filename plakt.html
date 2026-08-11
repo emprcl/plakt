@@ -239,6 +239,12 @@ input[type=color]{position:absolute;opacity:0;width:1px;height:1px;pointer-event
 .ly .lm:hover{color:var(--ink)}
 .ly .lm.on{opacity:1;color:#12b8d8}
 .ly .lm + .lv{margin-left:0}
+/* the blend marker isn't an action, so unlike MASK/HIDE it never hides on
+   hover — it's there to be read while you're looking at stack order. It
+   sits after the hover pair, which keeps the margin-left:auto chain above
+   untouched, and .lv holds its width at opacity:0 so nothing shifts. */
+.ly .bl{color:var(--dim);font-size:9px;letter-spacing:.1em}
+.ly.off .bl{opacity:.35}
 .ly.off{color:var(--faint)}
 .ly.off .t{text-decoration:line-through}
 .ly.off .lv{opacity:1}
@@ -877,6 +883,11 @@ function dashAttr(o){
    curated down to the common/useful ones */
 const BLENDS = ['normal','multiply','screen','overlay','darken','lighten','difference','exclusion'];
 const hasBlend = o => !!o.blend && o.blend !== 'normal';
+/* three letters each, for the marker on the layer row — a blend is the one
+   property that only means anything relative to what's under it, so the
+   stack is where you need to be able to see one is on */
+const BLEND_ABBR = {multiply:'MUL', screen:'SCR', overlay:'OVL', darken:'DRK',
+  lighten:'LGT', difference:'DIF', exclusion:'EXC'};
 /* Blend applies at two levels, and the difference is what `isolation`
    decides:
      · on a shape — it blends with whatever is painted beneath it inside
@@ -1516,6 +1527,7 @@ function docPanel(){
         <span class="t">${o.type === 'group' ? 'group' : o.type === 'text' ? esc(o.str.split('\n')[0].slice(0,18)) : o.type}</span>
         ${parent != null ? `<span class="lm${o.mask?' on':''}" data-mask="${o.id}" title="${o.mask ? 'Stop masking with this shape — the whole group shows again' : 'Use this shape as the group\'s mask: everything else in the group shows only where this shape covers it'}">MASK</span>` : ''}
         <span class="lv" data-vis="${o.id}" title="${o.hidden ? 'Show this layer again' : 'Hide this layer — it stays in the document but stops rendering, and stops exporting'}">${o.hidden ? 'SHOW' : 'HIDE'}</span>
+        ${hasBlend(o) ? `<span class="bl" title="Blending ${o.blend} with what's beneath it — change it in the ${o.type} tab, next to OPACITY">${BLEND_ABBR[o.blend]}</span>` : ''}
         <span class="x">#${o.id}</span>
       </button>`;
     const layers = [...doc.objects].reverse().map(o =>

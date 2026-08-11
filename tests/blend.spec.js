@@ -179,6 +179,68 @@ test.describe('blend modes', () => {
     expect(svg).toContain('mix-blend-mode:multiply');
   });
 
+  /* a blend only means anything against what's beneath it, and the stack
+     lives in the other tab — so the layer row has to say one is on */
+  test.describe('the layer row marks a blend', () => {
+    const openLayers = page => page.evaluate(() => { tab = 'layers'; panel(); });
+    const marker = (page, id) => page.locator(`.ly[data-pick="${id}"] .bl`);
+
+    test('nothing on a normal shape', async ({ page }) => {
+      const id = await addShape(page, 'r');
+      await openLayers(page);
+      await expect(marker(page, id)).toHaveCount(0);
+    });
+
+    test('an abbreviation once one is set', async ({ page }) => {
+      const { disc } = await stack(page);
+      await page.selectOption('#panel [data-blend]', 'multiply');
+      await openLayers(page);
+      await expect(marker(page, disc)).toHaveText('MUL');
+    });
+
+    test('and it goes away again on NORMAL', async ({ page }) => {
+      const { disc } = await stack(page);
+      await page.selectOption('#panel [data-blend]', 'screen');
+      await openLayers(page);
+      await expect(marker(page, disc)).toHaveText('SCR');
+
+      await page.evaluate(disc => { sel = [disc]; tab = 'selection'; panel(); }, disc);
+      await page.selectOption('#panel [data-blend]', 'normal');
+      await openLayers(page);
+      await expect(marker(page, disc)).toHaveCount(0);
+    });
+
+    /* unlike MASK and HIDE it isn't an action, so it can't wait for hover */
+    test('it reads without hovering the row', async ({ page }) => {
+      const { disc } = await stack(page);
+      await page.selectOption('#panel [data-blend]', 'overlay');
+      await openLayers(page);
+      await expect(marker(page, disc)).toBeVisible();
+      expect(await marker(page, disc).evaluate(n => getComputedStyle(n).opacity)).toBe('1');
+    });
+
+    test('a group child gets one, and so does the group', async ({ page }) => {
+      await stack(page);
+      await page.selectOption('#panel [data-blend]', 'multiply');
+      await page.evaluate(() => { sel = doc.objects.map(o => o.id); groupSel(); });
+      const gid = await page.evaluate(() => doc.objects[0].id);
+      await page.evaluate(gid => { sel = [gid]; tab = 'selection'; panel(); }, gid);
+      await page.selectOption('#panel [data-blend]', 'screen');
+
+      const child = await page.evaluate(() => doc.objects[0].children.find(c => c.blend).id);
+      await openLayers(page);
+      await expect(marker(page, gid)).toHaveText('SCR');
+      await expect(marker(page, child)).toHaveText('MUL');
+    });
+
+    test('every mode has an abbreviation, all distinct', async ({ page }) => {
+      const abbr = await page.evaluate(() =>
+        BLENDS.filter(b => b !== 'normal').map(b => BLEND_ABBR[b]));
+      expect(abbr.every(a => typeof a === 'string' && a.length === 3)).toBe(true);
+      expect(new Set(abbr).size).toBe(abbr.length);
+    });
+  });
+
   test('setting a blend is undoable', async ({ page }) => {
     await stack(page);
     await page.selectOption('#panel [data-blend]', 'overlay');
