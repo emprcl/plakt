@@ -34,7 +34,9 @@ test.describe('grouping', () => {
     expect(doc.objects[0].type).not.toBe('group');
   });
 
-  test('grouping a selection that includes a group is rejected (no nesting)', async ({ page }) => {
+  /* nesting is still off the table, so ⌘G on a selection holding exactly one
+     group has only one sensible reading left: grow that group */
+  test('grouping a selection that includes one group adds the rest to it', async ({ page }) => {
     const { groupId } = await makeGroup(page);
     const id3 = await addShape(page, 'r');   // a fresh top-level object alongside the group
     await moveObj(page, id3, -700, 700);     // clear of the group's bbox, or clicks would hit id3 instead
@@ -43,9 +45,13 @@ test.describe('grouping', () => {
 
     await page.keyboard.press('Control+g');
     const doc = await getDoc(page);
-    expect(doc.objects).toHaveLength(2);   // unchanged — the group was never nested into a new one
-    expect(doc.objects.find(o => o.id === groupId).type).toBe('group');
-    expect(doc.objects[0].type).toBe('group');
+    expect(doc.objects).toHaveLength(1);                     // the loose object was absorbed
+    const g = doc.objects[0];
+    expect(g.id).toBe(groupId);                              // the same group, not a new one
+    expect(g.type).toBe('group');
+    expect(g.children.map(c => c.id)).toContain(id3);
+    expect(g.children).toHaveLength(3);
+    expect(g.children.every(c => c.type !== 'group')).toBe(true);   // still one level deep
   });
 
   test('dragging the group moves both children together, preserving their relative offset', async ({ page }) => {

@@ -77,7 +77,10 @@ test.describe('opacity, corner radius, dash pattern, and layer reordering', () =
     expect(after).toContain(id3);
   });
 
-  test('dragging a top-level row onto a group child row (different list) is a no-op', async ({ page }) => {
+  /* this used to be a no-op — a cross-list drag was refused outright. It's a
+     membership move now (see group-membership.spec.js for the coordinate
+     side); what's checked here is that the row drag routes it that way. */
+  test('dragging a top-level row onto a group child row moves it into the group', async ({ page }) => {
     await page.keyboard.press('r');
     const id1 = await page.evaluate(() => sel[0]);
     await page.keyboard.press('c');
@@ -89,14 +92,14 @@ test.describe('opacity, corner radius, dash pattern, and layer reordering', () =
     const id3 = await page.evaluate(() => sel[0]);
 
     await page.evaluate(() => { tab = 'layers'; panel(); });
-    const before = await getDoc(page);
 
     await page.locator(`.ly[data-pick="${id3}"]`).dragTo(page.locator(`.ly[data-pick="${id1}"]`));
 
     const after = await getDoc(page);
-    expect(after.objects.map(o => o.id)).toEqual(before.objects.map(o => o.id));
-    expect(after.objects.find(o => o.id === group.id).children.map(c => c.id))
-      .toEqual(before.objects.find(o => o.id === group.id).children.map(c => c.id));
+    expect(after.objects.map(o => o.id)).toEqual([group.id]);   // absorbed, nothing left loose
+    const kids = after.objects[0].children.map(c => c.id);
+    expect(kids).toContain(id3);
+    expect(kids).toEqual(expect.arrayContaining([id1, id2, id3]));
   });
 
   test('a bordered rect keeps a proportionally-scaled corner radius after group resize + ungroup', async ({ page }) => {

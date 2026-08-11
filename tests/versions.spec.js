@@ -359,3 +359,151 @@ test.describe('resuming from the last version on page load', () => {
     expect(d.name).toBe('untitled');
   });
 });
+
+/* Capture is debounced so a burst of edits settles into one snapshot. The
+   cost, until this flush existed, was that anything done in the last few
+   seconds simply vanished on a refresh — and refreshing right after a
+   change is exactly how you check that the change stuck. */
+test.describe('a pending capture is flushed when the page goes away', () => {
+  const versions = page => page.evaluate(() =>
+    JSON.parse(localStorage.getItem('plakt:versions:untitled') || '[]'));
+  /* the real event fires on document and bubbles; synthesise it faithfully */
+  const hide = page => page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange', { bubbles: true }));
+  });
+
+  test('an edit made moments before a reload survives it', async ({ page }) => {
+    await page.goto('plakt.html');
+    await page.evaluate(() => localStorage.clear());
+    await page.keyboard.press('e');
+    const id = await addShape(page, 'r');
+    await page.evaluate(() => captureVersion());        // a settled baseline
+
+    // …then an edit, and a reload well inside the debounce window
+    await page.evaluate(() => { doc.objects[0].x += 123; touch(); });
+    const x = await page.evaluate(() => doc.objects[0].x);
+
+    await page.reload();
+    await expect(page.locator('#doc-svg')).toBeVisible();
+    expect((await getDoc(page)).objects.find(o => o.id === id).x).toBe(x);
+  });
+
+  test('so does a reorder inside a group', async ({ page }) => {
+    await page.goto('plakt.html');
+    await page.evaluate(() => localStorage.clear());
+    await page.keyboard.press('e');
+    await addShape(page, 'r');
+    await addShape(page, 'c');
+    await page.evaluate(() => {
+      doc.objects[1].x += 400; sel = doc.objects.map(o => o.id); groupSel(); enter(null);
+    });
+    await page.evaluate(() => captureVersion());
+
+    const kids = () => page.evaluate(() =>
+      doc.objects.find(o => o.type === 'group').children.map(c => c.id).join(','));
+    const before = await kids();
+    // send the bottom child to the top of its own list
+    await page.evaluate(() => {
+      const g = doc.objects.find(o => o.type === 'group');
+      dropLayer({ id: g.children[0].id, parent: g.id, isGroup: false }, { parent: g.id, before: null });
+    });
+    const after = await kids();
+    expect(after).not.toBe(before);
+
+    await page.reload();
+    await expect(page.locator('#doc-svg')).toBeVisible();
+    expect(await kids()).toBe(after);
+  });
+
+  /* A snapshot carries the whole document, images included, so an
+     illustrated file overflows the storage quota long before VERSION_CAP.
+     Before eviction, the first failed write was permanent: nothing saved
+     again, and every later edit vanished on reload no matter how long you
+     waited for the debounce. */
+  test.describe('when local storage is full', () => {
+    /* a small hard budget stands in for the real multi-MB quota */
+    const budget = (page, bytes) => page.evaluate(b => {
+      const real = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (k, v) {
+        if (k.startsWith('plakt:versions:') && v.length > b) {
+          const e = new Error('quota exceeded'); e.name = 'QuotaExceededError'; throw e;
+        }
+        return real.call(this, k, v);
+      };
+    }, bytes);
+
+    test('the newest version still saves, at the cost of the oldest', async ({ page }) => {
+      await openApp(page);
+      await page.evaluate(() => localStorage.clear());
+      await addShape(page, 'r');
+      await budget(page, 3000);
+
+      for (let i = 1; i <= 12; i++) {
+        await page.evaluate(i => { doc.objects[0].x = i * 7; captureVersion(); }, i);
+      }
+
+      const list = await versions(page);
+      expect(list.length).toBeGreaterThan(0);       // never wedged shut
+      expect(list.length).toBeLessThan(12);         // and older ones were shed
+      expect(list[0].doc.objects[0].x).toBe(84);    // newest state is the one kept
+      expect((await page.locator('#msg').textContent()).toLowerCase()).toContain('keeping the newest');
+    });
+
+    test('so a reorder still survives a reload', async ({ page }) => {
+      await page.goto('plakt.html');
+      await page.evaluate(() => localStorage.clear());
+      await page.keyboard.press('e');
+      await addShape(page, 'r');
+      await addShape(page, 'c');
+      await page.evaluate(() => {
+        doc.objects[1].x += 400; sel = doc.objects.map(o => o.id); groupSel(); enter(null);
+      });
+      await budget(page, 3000);
+      // fill it up first, so the reorder's capture is one that has to evict
+      for (let i = 1; i <= 10; i++)
+        await page.evaluate(i => { doc.objects[0].rot = i; captureVersion(); }, i);
+
+      const kids = () => page.evaluate(() =>
+        doc.objects.find(o => o.type === 'group').children.map(c => c.id).join(','));
+      await page.evaluate(() => {
+        const g = doc.objects.find(o => o.type === 'group');
+        dropLayer({ id: g.children[0].id, parent: g.id, isGroup: false }, { parent: g.id, before: null });
+      });
+      const after = await kids();
+
+      await page.reload();
+      await expect(page.locator('#doc-svg')).toBeVisible();
+      expect(await kids()).toBe(after);
+    });
+
+    /* a document too big to store even once can't be auto-restored at all,
+       and should say so rather than spin or fail silently */
+    test('a document that cannot fit at all reports it plainly', async ({ page }) => {
+      await openApp(page);
+      await page.evaluate(() => localStorage.clear());
+      await addShape(page, 'r');
+      await budget(page, 1);
+
+      await page.evaluate(() => captureVersion());
+      expect(await versions(page)).toHaveLength(0);
+      expect((await page.locator('#msg').textContent()).toLowerCase()).toContain('too large');
+    });
+  });
+
+  test('hiding the tab flushes too, but only when something is pending', async ({ page }) => {
+    await openApp(page);
+    await page.evaluate(() => localStorage.clear());
+    await addShape(page, 'r');
+    await page.evaluate(() => captureVersion());
+    const settled = (await versions(page)).length;
+
+    await hide(page);
+    await hide(page);
+    expect((await versions(page)).length).toBe(settled);   // nothing pending, nothing written
+
+    await page.evaluate(() => { doc.objects[0].x += 5; touch(); });
+    await hide(page);
+    expect((await versions(page)).length).toBe(settled + 1);
+  });
+});

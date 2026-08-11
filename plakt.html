@@ -170,6 +170,11 @@ body.edit #panel{transform:none}
   border:1px solid transparent;letter-spacing:.1em}
 .alb:hover{border-color:var(--hair);color:var(--ink)}
 .alb.on{background:var(--ink);color:var(--chrome)}
+/* a reference the current selection can't actually use (SELECTION with one
+   object, ARTBOARD from inside a group) — still shown, so the choice reads
+   as a pair, but visibly out of reach and carrying a title saying why */
+.alb[disabled]{color:var(--faint);cursor:default}
+.alb[disabled]:hover{border-color:transparent;color:var(--faint)}
 .fw{display:flex;align-items:center;margin:0 -6px;width:calc(100% + 12px)}
 .fw:hover{background:var(--chrome2)}
 .fw .f{flex:1;margin:0;width:auto;background:none}
@@ -217,10 +222,18 @@ input[type=color]{position:absolute;opacity:0;width:1px;height:1px;pointer-event
 .f.on{color:var(--ink)}
 .f i{margin-left:auto;font-style:normal;font-family:var(--mono);font-size:9px;color:var(--faint)}
 
-.ly{display:flex;align-items:center;gap:8px;padding:4px 6px;margin:0 -6px;width:calc(100% + 12px);color:var(--dim)}
+.ly{display:flex;align-items:center;gap:8px;padding:4px 6px;margin:0 -6px;width:calc(100% + 12px);color:var(--dim);position:relative}
 .ly:hover{background:var(--chrome2)}
 .ly.on{background:var(--chrome2);color:var(--ink)}
-.ly.dragover{box-shadow:inset 0 -2px 0 var(--ink)}
+/* What you aim at while dragging a layer is the gap between two rows, not a
+   row — so the indicator is one line placed at that gap, rather than an edge
+   drawn on whichever row happened to be under the pointer. Indented and
+   tinted when the gap belongs to a group's children, since the same pixel
+   row can mean either list. The strip of padding at the bottom keeps the
+   last gap (below everything) reachable. */
+#layerList{position:relative;padding-bottom:12px}
+#dropline{position:absolute;left:0;right:0;height:2px;background:var(--ink);display:none;pointer-events:none}
+#dropline.in{left:26px;background:#12b8d8}
 .ly .ch{width:9px;height:9px;flex:none}
 .ly .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:.08em}
 .ly .x{color:var(--faint);font-size:9px}
@@ -1257,6 +1270,19 @@ function scheduleVersionCapture(){
   clearTimeout(versionTimer);
   versionTimer = setTimeout(captureVersion, VERSION_DEBOUNCE);
 }
+/* …and fire it early if the page is about to go away. Without this, every
+   edit made in the last VERSION_DEBOUNCE milliseconds is simply lost on a
+   refresh — boot resumes from the newest stored version, which predates
+   them. Reloading straight after a change is exactly how you'd check that
+   the change stuck, so this was the easiest work in the app to lose.
+   localStorage writes are synchronous, so a capture here completes.
+   pagehide covers reload/close/navigation; visibilitychange catches the
+   cases where pagehide never fires (mobile especially). */
+const flushVersion = () => { if(versionTimer) captureVersion(); };
+addEventListener('pagehide', flushVersion);
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState === 'hidden') flushVersion();
+});
 const touch = () => { dirty = true; full(); scheduleVersionCapture(); };
 /* touch() for the handlers that can't afford panel()'s rebuild: same
    bookkeeping, minus the parts that would blow away the focused field or
@@ -1383,7 +1409,10 @@ function imagePanel(o){
     </label>
   </div>`;
 }
-function objPanel(o){
+/* every object type ends with the same Align section, so it's appended once
+   here rather than repeated down each branch of objBody */
+const objPanel = o => objBody(o) + membershipSection() + alignSection();
+function objBody(o){
   if(o.type === 'group') return groupPanel(o);
   if(o.type === 'image') return imagePanel(o);
   const isLine = o.type === 'line';
@@ -1518,6 +1547,73 @@ function blendSection(o, inGroup){
 }
 
 let tab = 'artboard';
+/* which rectangle Align measures against — see alignSel() for the two.
+   It's a sticky UI preference, not document state, so it stays out of `doc`
+   and out of undo. alignRefFor() narrows it to what the current selection
+   can actually run, so the buttons and the commands never disagree. */
+let alignRef = 'selection';
+/* A group's child measures against the document only if you first map its
+   frame onto the document's — so the artboard reference is off the table
+   whenever the selection holds one. Note this asks about parentage rather
+   than `entered`: Escape backs out of a group without clearing the
+   selection, so a child stays selectable with `entered` already null. */
+const selInGroup = () => selectedObjs().some(o => parentGroupOf(o.id) !== null);
+function alignRefFor(){
+  if(entered !== null || selInGroup()) return 'selection';
+  if(sel.length < 2)                   return 'artboard';   /* one object is its own bbox */
+  return alignRef;
+}
+/* shown only when the selection actually affords a membership move, so the
+   two operations that were previously reachable by no gesture at all get a
+   visible home without adding a section to every panel */
+function membershipSection(){
+  const objs = selectedObjs();
+  const inGroup = objs.filter(o => parentGroupOf(o.id) !== null);
+  const groups = objs.filter(o => o.type === 'group');
+  const loose = objs.filter(o => o.type !== 'group' && parentGroupOf(o.id) === null);
+  const canAdd = groups.length === 1 && loose.length > 0;
+  if(!inGroup.length && !canAdd) return '';
+  return `<div class="sec">
+    ${secHead('Group', canAdd
+      ? 'the loose objects join the selected group, keeping exactly where they sit on the artboard'
+      : 'the objects leave their group and land just above it in the stack, keeping where they sit',
+      canAdd ? `<em>${loose.length} joining</em>` : `<em>${inGroup.length} inside</em>`)}
+    <div class="r">
+      ${canAdd ? `<button class="alb" id="addToGroup" style="width:auto;padding:5px 10px">⌘G ADD TO GROUP</button>` : ''}
+      ${inGroup.length ? `<button class="alb" id="outOfGroup" style="width:auto;padding:5px 10px">MOVE OUT</button>` : ''}
+    </div>
+    <div class="tip" style="margin:6px 0 0">or drag rows across in the Layers tab</div>
+  </div>`;
+}
+/* offered for any selection at all, unlike Distribute — a single object
+   against the artboard is the commonest align there is, and until now it
+   was only reachable from the command palette */
+function alignSection(){
+  const ref = alignRefFor(), multi = sel.length > 1, inside = entered !== null || selInGroup();
+  const rb = (id, label, ok, why) =>
+    `<button class="alb ${ref===id?'on':''}" data-alignref="${id}"${ok ? '' : ` disabled title="${why}"`}
+      style="width:auto;padding:5px 10px">${label}</button>`;
+  /* one object inside a group can reach neither reference: the artboard
+     isn't its frame, and on its own it *is* the selection box. Rather than
+     six buttons that only flash when pressed, say so and grey them out. */
+  const usable = ref === 'artboard' ? !inside : multi;
+  const btn = (m, l) =>
+    `<button class="alb" data-align="${m}"${usable ? '' : ' disabled'} style="width:auto;padding:5px 8px">${l}</button>`;
+  return `<div class="sec">
+    ${secHead('Align', !usable
+      ? 'one object inside a group has nothing to align against — select a sibling too, or move it out'
+      : ref === 'artboard'
+        ? 'against the artboard — the whole page, margin excluded'
+        : "against the selection's own bounding box, so the outermost objects stay put",
+      `<em>${usable ? ref : 'no reference'}</em>`)}
+    <div class="r">
+      ${rb('artboard','ARTBOARD', !inside, "the artboard isn't a frame you can measure against from inside a group")}
+      ${rb('selection','SELECTION', multi, 'needs 2 or more objects — one is already its own bounding box')}
+    </div>
+    <div class="r" style="margin-top:6px">${btn('left','LEFT')}${btn('centerX','CENTER')}${btn('right','RIGHT')}</div>
+    <div class="r" style="margin-top:6px">${btn('top','TOP')}${btn('centerY','MIDDLE')}${btn('bottom','BOTTOM')}</div>
+  </div>`;
+}
 
 function docPanel(){
   if(tab === 'layers'){
@@ -1534,7 +1630,8 @@ function docPanel(){
       row(o, null) + (o.type === 'group' ? [...o.children].reverse().map(c => row(c, o.id)).join('') : '')
     ).join('') || '<div class="tip" style="margin:0">nothing on the artboard yet</div>';
     return `<div class="sec" style="border:0">
-      ${secHead('Stack', 'topmost first · drag to reorder · <b>[</b> and <b>]</b> reorder the selection · <b>⇧</b> click to add', '<em>top first</em>')}${layers}
+      ${secHead('Stack', 'topmost first · drag a row to the line between two others · a line indented under a group drops into it · <b>[</b> and <b>]</b> reorder the selection · <b>⇧</b> click to add', '<em>top first</em>')}
+      <div id="layerList">${layers}<div id="dropline"></div></div>
     </div>`;
   }
 
@@ -1584,30 +1681,24 @@ function tabsHTML(o, multi){
 /* shown instead of objPanel() while more than one object is selected —
    no per-type property editing, just the group-level actions */
 function multiPanel(){
-  const kinds = [...new Set(selectedObjs().map(o => o.type))].join(', ');
+  const objs = selectedObjs();
+  const kinds = [...new Set(objs.map(o => o.type))].join(', ');
+  /* with a group in the selection ⌘G means "add to it", which the Group
+     section below says properly — so this button, which would claim to
+     make a new group, stands down rather than duplicating it */
+  const canGroup = !objs.some(o => o.type === 'group');
   return `<div class="sec">
     ${secHead('Selection', 'drag any one of them to move the whole group · arrow keys nudge all of them',
       `<em>${sel.length} objects</em>`)}
     <div class="tip" style="margin:0">${kinds}</div>
     <div class="r" style="margin-top:8px">
-      <button class="alb" id="msGroup" style="width:auto;padding:5px 10px">⌘G GROUP</button>
+      ${canGroup ? `<button class="alb" id="msGroup" style="width:auto;padding:5px 10px">⌘G GROUP</button>` : ''}
       <button class="alb" id="msDup" style="width:auto;padding:5px 10px">⌘D DUPLICATE</button>
       <button class="alb" id="msDel" style="width:auto;padding:5px 10px">⌫ DELETE</button>
     </div>
   </div>
-  <div class="sec">
-    ${secHead('Align', "against the selection's own bounding box")}
-    <div class="r">
-      <button class="alb" data-align="left" style="width:auto;padding:5px 8px">LEFT</button>
-      <button class="alb" data-align="centerX" style="width:auto;padding:5px 8px">CENTER</button>
-      <button class="alb" data-align="right" style="width:auto;padding:5px 8px">RIGHT</button>
-    </div>
-    <div class="r" style="margin-top:6px">
-      <button class="alb" data-align="top" style="width:auto;padding:5px 8px">TOP</button>
-      <button class="alb" data-align="centerY" style="width:auto;padding:5px 8px">MIDDLE</button>
-      <button class="alb" data-align="bottom" style="width:auto;padding:5px 8px">BOTTOM</button>
-    </div>
-  </div>
+  ${membershipSection()}
+  ${alignSection()}
   <div class="sec">
     ${secHead('Distribute', 'equalises the gaps between 3 or more objects')}
     <div class="r">
@@ -1812,42 +1903,111 @@ function wire(){
     if(e.detail > 1) tab = 'selection';
     full();
   });
-  /* drag a layer row onto another to reorder — restricted to the same list
-     (top-level siblings, or one group's children) since moving an object
-     into/out of a group is a membership change, not a plain reorder */
-  let dragLayer = null;
-  $$('#panel .ly[data-pick]').forEach(row => {
-    row.addEventListener('dragstart', () => {
-      dragLayer = { id: +row.dataset.pick, parent: row.dataset.parent ? +row.dataset.parent : null };
+  /* ── dragging layer rows ──────────────────────────────────────────
+     What you're aiming at is the gap between two rows, not a row. That
+     matters because the list is a flattened, reversed tree: a gap can
+     belong to the document's own list or to a group's children, and the
+     gaps above the first row and below the last one are positions no
+     row-as-target scheme can express at all — which is how a document
+     whose every object sits in one group ends up with nothing draggable
+     out of it. Addressing gaps directly gives all of them a name.
+
+     A gap is (parent, before): the list it joins, and the member of that
+     list it slots in front of — null meaning the top of that list. */
+  const layerList = $('#layerList');
+  if(layerList){
+    const line = $('#dropline');
+    const INDENT = 26;                     /* matches row()'s padding-left for a child */
+    const rows = () => $$('#layerList .ly[data-pick]');
+    const info = r => ({ id: +r.dataset.pick, parent: r.dataset.parent ? +r.dataset.parent : null });
+    let dragLayer = null, dropAt = null;
+
+    /* gap index (0…n, counted from the top of the rendered list) into the
+       list-and-position it names */
+    function resolveGap(g, indented){
+      const R = rows().map(info), above = R[g-1], below = R[g];
+      if(dragLayer.isGroup){
+        /* a group only ever lands at the top level, so a gap inside some
+           other group's block snaps to just below that whole group */
+        const inside = (below && below.parent !== null) ? below.parent
+                     : (above && above.parent !== null) ? above.parent : null;
+        if(inside !== null) return { parent: null, before: inside };
+        return { parent: null, before: above ? above.id : null };
+      }
+      /* the row under the gap being a child places the gap inside that
+         group — whether the row above it is the group's own or a sibling */
+      if(below && below.parent !== null)
+        return { parent: below.parent,
+                 before: above && above.parent === below.parent ? above.id : null };
+      /* the gap just past a group's last child is the one place two lists
+         genuinely overlap: the bottom of the group, or the top level right
+         below it. The pointer's indent picks, and the line shows which. */
+      if(above && above.parent !== null)
+        return indented ? { parent: above.parent, before: above.id }
+                        : { parent: null, before: above.parent };
+      return { parent: null, before: above ? above.id : null };
+    }
+    /* back the other way, so the line is drawn where the object will really
+       land rather than where the pointer happens to be */
+    function gapOf(t){
+      const R = rows().map(info);
+      if(t.before == null) {
+        if(t.parent === null) return 0;
+        const i = R.findIndex(r => r.id === t.parent);
+        return i < 0 ? 0 : i + 1;
+      }
+      let i = R.findIndex(r => r.id === t.before && r.parent === t.parent);
+      if(i < 0) return R.length;
+      /* landing below a top-level group means below everything it holds,
+         and its children are rendered underneath it */
+      for(i++; i < R.length && R[i].parent === t.before; i++);
+      return i;
+    }
+    const hideLine = () => { line.style.display = 'none'; };
+    function showLine(t){
+      const R = rows(), g = gapOf(t);
+      if(!R.length) return hideLine();
+      const box = layerList.getBoundingClientRect();
+      const y = g === 0 ? R[0].getBoundingClientRect().top
+                        : R[Math.min(g, R.length) - 1].getBoundingClientRect().bottom;
+      line.style.top = (y - box.top) + 'px';
+      line.classList.toggle('in', t.parent !== null);
+      line.style.display = 'block';
+    }
+    const aim = (g, e) => {
+      const t = resolveGap(g, e.clientX - layerList.getBoundingClientRect().left >= INDENT);
+      e.preventDefault(); dropAt = t; showLine(t);
+    };
+    rows().forEach((row, i) => {
+      row.addEventListener('dragstart', () => {
+        const { id, parent } = info(row);
+        dragLayer = { id, parent, isGroup: (doc.objects.find(o => o.id === id) || {}).type === 'group' };
+      });
+      row.addEventListener('dragover', e => {
+        if(!dragLayer) return;
+        const r = row.getBoundingClientRect();
+        aim(i + (e.clientY > r.top + r.height/2 ? 1 : 0), e);
+      });
     });
-    row.addEventListener('dragover', e => {
+    /* the padding strip under the last row, so the bottom gap is aimable
+       without having to hit the last row's lower half exactly */
+    layerList.addEventListener('dragover', e => {
       if(!dragLayer) return;
-      const parent = row.dataset.parent ? +row.dataset.parent : null;
-      if(parent !== dragLayer.parent || +row.dataset.pick === dragLayer.id) return;
+      const R = rows();
+      if(!R.length || e.clientY <= R[R.length-1].getBoundingClientRect().bottom) return;
+      aim(R.length, e);
+    });
+    layerList.addEventListener('dragleave', e => {
+      if(!layerList.contains(e.relatedTarget)) hideLine();
+    });
+    layerList.addEventListener('drop', e => {
       e.preventDefault();
-      row.classList.add('dragover');
+      const t = dropAt, src = dragLayer;
+      hideLine(); dropAt = null; dragLayer = null;
+      if(t && src) dropLayer(src, t);
     });
-    row.addEventListener('dragleave', () => row.classList.remove('dragover'));
-    row.addEventListener('drop', e => {
-      e.preventDefault();
-      row.classList.remove('dragover');
-      if(!dragLayer) return;
-      const targetId = +row.dataset.pick, parent = row.dataset.parent ? +row.dataset.parent : null;
-      const src = dragLayer; dragLayer = null;
-      if(parent !== src.parent || targetId === src.id) return;
-      commit();
-      const list = src.parent !== null ? doc.objects.find(o => o.id === src.parent).children : doc.objects;
-      const from = list.findIndex(o => o.id === src.id), to = list.findIndex(o => o.id === targetId);
-      if(from < 0 || to < 0) return;
-      const [item] = list.splice(from, 1);
-      list.splice(to, 0, item);
-      touch();
-    });
-    row.addEventListener('dragend', () => {
-      dragLayer = null;
-      $$('#panel .ly').forEach(r => r.classList.remove('dragover'));
-    });
-  });
+    layerList.addEventListener('dragend', () => { dragLayer = null; dropAt = null; hideLine(); });
+  }
   const msGroup = $('#msGroup'); if(msGroup) msGroup.onclick = groupSel;
   const msDup = $('#msDup'); if(msDup) msDup.onclick = dup;
   const msDel = $('#msDel'); if(msDel) msDel.onclick = del;
@@ -1858,6 +2018,9 @@ function wire(){
   if(wtSel) wtSel.onchange = () => { commit(); o.wt = +wtSel.value; touch(); };
   const lockBtn = $('#panel [data-lock]');
   if(lockBtn) lockBtn.onclick = () => { commit(); o.lockAspect = !o.lockAspect; touch(); };
+  $$('#panel [data-alignref]').forEach(b => b.onclick = () => { alignRef = b.dataset.alignref; panel(); });
+  const addG = $('#addToGroup'); if(addG) addG.onclick = addToGroupCmd;
+  const outG = $('#outOfGroup'); if(outG) outG.onclick = removeFromGroupCmd;
   $$('#panel [data-align]').forEach(b => b.onclick = () => alignSel(b.dataset.align));
   const distX = $('#distX'); if(distX) distX.onclick = () => distributeSel('x');
   const distY = $('#distY'); if(distY) distY.onclick = () => distributeSel('y');
@@ -2288,8 +2451,13 @@ function toggleHidden(id){
 function groupSel(){
   const objs = selectedObjs();
   if(objs.length < 2) return flash('select at least 2 objects to group');
-  if(objs.some(o => o.type === 'group')) return flash("can't group a group — ungroup it first");
   if(entered !== null) return flash("can't group while inside a group");
+  const groups = objs.filter(o => o.type === 'group');
+  /* exactly one group in the selection means "put the rest in it" — with
+     nesting off the table that's the only thing ⌘G could sensibly do here,
+     and it's the gesture people reach for to grow an existing group */
+  if(groups.length === 1) return addToGroupCmd();
+  if(groups.length > 1)   return flash("can't group two groups — ungroup one first");
   commit();
   const list = activeList(), b = bboxOf(objs);
   const topIdx = Math.max(...objs.map(o => list.indexOf(o)));
@@ -2355,6 +2523,143 @@ function ungroupSel(){
   const baked = g.children.map(c => ({ ...bakeChild(c, g), mask: undefined }));
   list.splice(idx, 1, ...baked);
   sel = baked.map(o => o.id); tab = 'selection'; touch();
+}
+
+/* ── group membership ────────────────────────────────────────────────
+   Moving an object in or out of a group is a coordinate change, not just
+   a list change: a child's x/y/w/h/rot live in its group's local frame,
+   the document's objects live in the document's. Every move here goes
+   through document space — bakeChild() lifts a child out of its group's
+   frame, regroup() re-derives the frame around whatever's left — so
+   nothing shifts on screen when membership changes.
+
+   regroup() rebuilds the group's box from its contents exactly the way
+   groupSel does. Because bakeChild has already folded the group's own
+   rotation and scale into each child, resetting them to identity here is
+   a visual no-op; it just means a group's rot reads as whatever you've
+   applied since its last membership change. */
+function regroup(g, leaves){
+  const b = bboxOf(leaves);
+  g.children = leaves.map(o => ({ ...o, x: o.x - b.x, y: o.y - b.y }));
+  g.x = b.x; g.y = b.y; g.w = b.w; g.h = b.h; g.rot = 0;
+}
+/* a group holding fewer than two objects isn't a group — it dissolves at
+   its own stack position, leaving exactly what ungroup would have left */
+function settle(g, leaves){
+  if(leaves.length >= 2) return regroup(g, leaves);
+  const i = doc.objects.indexOf(g);
+  if(i >= 0) doc.objects.splice(i, 1, ...leaves.map(c => ({ ...c, mask: undefined })));
+  if(entered === g.id) entered = null;
+}
+/* Landing a layer where the drop line promised. Same list is a reorder,
+   a different one is a membership change; both take (parent, before) with
+   `before` naming the member to slot in front of, null for the top. */
+function dropLayer(src, t){
+  const from = parentGroupOf(src.id);
+  if(from !== t.parent) return moveMembership([src.id], t.parent, t.before);
+  const L = t.parent === null ? doc.objects
+          : (doc.objects.find(o => o.id === t.parent) || {}).children;
+  if(!L) return;
+  const i = L.findIndex(o => o.id === src.id);
+  if(i < 0) return;
+  let k = t.before == null ? L.length : L.findIndex(o => o.id === t.before);
+  if(k < 0) k = L.length;
+  /* both of these name the slot it already occupies: dropping into the gap
+     directly above or below yourself is where you already are */
+  if(k === i || k === i + 1) return;
+  commit();
+  const [item] = L.splice(i, 1);
+  L.splice(k > i ? k - 1 : k, 0, item);
+  touch();
+}
+/* the one membership move, shared by the Layers drag and the commands.
+   `ids` may span the document and any number of groups; `dest` is a group
+   id, or null for the top level. The movers land in front of `beforeId` in
+   the destination list, or at its top when that's null. AUTO — the default,
+   used by the commands, which have no position in mind — means the top of a
+   group, or just above the group they came from when leaving one. */
+const AUTO = Symbol('auto');
+function moveMembership(ids, dest, beforeId = AUTO){
+  /* anything already in the destination isn't moving — and dropping it
+     back in would round-trip it through settle(), which could dissolve
+     the very group we're adding to */
+  ids = ids.filter(id => parentGroupOf(id) !== dest);
+  const objs = ids.map(id => allObjects().find(o => o.id === id)).filter(Boolean);
+  if(!objs.length) return;
+  if(dest !== null && objs.some(o => o.type === 'group'))
+    return flash("a group can't go inside another group — ungroup it first");
+  commit();
+  /* lift each mover into document space, out of whatever list held it.
+     Grouped by parent so each source group is rebuilt once, not per child. */
+  const byParent = new Map();
+  objs.forEach(o => {
+    const p = parentGroupOf(o.id);
+    byParent.set(p, [...(byParent.get(p) || []), o.id]);
+  });
+  const movers = [], sources = [];
+  byParent.forEach((memberIds, p) => {
+    if(p === null){
+      memberIds.forEach(id => {
+        const i = doc.objects.findIndex(o => o.id === id);
+        if(i >= 0) movers.push(doc.objects.splice(i, 1)[0]);
+      });
+      return;
+    }
+    const g = doc.objects.find(o => o.id === p);
+    if(!g) return;
+    sources.push(g);
+    const leaves = g.children.map(c => bakeChild(c, g));
+    /* a mask flag only means anything among the siblings it was clipping */
+    leaves.forEach(c => { if(memberIds.includes(c.id)) movers.push({ ...c, mask: undefined }); });
+    settle(g, leaves.filter(c => !memberIds.includes(c.id)));
+  });
+  if(!movers.length){ touch(); return; }
+  /* …and drop them in. beforeId is resolved now, not earlier: settle() may
+     have dissolved a source group and moved everything below it. */
+  const at = (list, key) => {
+    const i = (beforeId === AUTO || beforeId == null) ? -1 : list.findIndex(key);
+    return i < 0 ? list.length : i;      /* the top of the list, array-wise the end */
+  };
+  const g = dest === null ? null : doc.objects.find(o => o.id === dest && o.type === 'group');
+  if(!g){
+    /* asked to leave a group with no position in mind, the objects land
+       directly above the group they came from rather than on top of the
+       page — pulling a shape out of a buried group shouldn't restack it.
+       (Unless that group dissolved on the way out, hence the -1 check.) */
+    const src = sources.length ? doc.objects.indexOf(sources[0]) : -1;
+    doc.objects.splice(beforeId === AUTO && src >= 0 ? src + 1
+                                                     : at(doc.objects, o => o.id === beforeId), 0, ...movers);
+    entered = null;
+  } else {
+    const leaves = g.children.map(c => bakeChild(c, g));
+    leaves.splice(at(leaves, c => c.id === beforeId), 0, ...movers);
+    regroup(g, leaves);
+    entered = g.id;
+  }
+  /* the moved objects become the selection, but the panel stays on whatever
+     tab you were on — same reason a single click in the Layers list doesn't
+     switch either: rearranging a stack is a run of small moves, and yanking
+     the panel away after each one puts the list you're working in behind a
+     tab click every time */
+  sel = movers.map(o => o.id); touch();
+}
+/* ⌘G with a group in the selection reads as "put these in that group"
+   rather than "nest a new one" — groups are one level deep, so nesting
+   isn't the competing interpretation */
+function addToGroupCmd(){
+  const objs = selectedObjs();
+  const groups = objs.filter(o => o.type === 'group');
+  if(groups.length !== 1) return flash('select a group and the objects to put into it');
+  const rest = objs.filter(o => o.type !== 'group').map(o => o.id);
+  if(!rest.length) return flash('select something to put into the group');
+  moveMembership(rest, groups[0].id);
+  flash(`added ${rest.length} object${rest.length===1?'':'s'} to the group`);
+}
+function removeFromGroupCmd(){
+  const ids = selectedObjs().filter(o => parentGroupOf(o.id) !== null).map(o => o.id);
+  if(!ids.length) return flash('select something inside a group first');
+  moveMembership(ids, null);
+  flash(`moved ${ids.length} object${ids.length===1?'':'s'} out of the group`);
 }
 
 /* ── clipboard ───────────────────────────────────────────────────────
@@ -2431,17 +2736,31 @@ function order(d){
   const j = i + d; if(j < 0 || j >= list.length) return;
   commit(); [list[i], list[j]] = [list[j], list[i]]; touch();
 }
-/* align/distribute operate purely on the selected objects' own coordinates
-   relative to each other — unlike centre()/snapSel()/etc below (which
-   measure against the *document*), they need no entered-group guard:
-   whatever frame the selection's ids live in, they all share it (see
-   selectedObjs()'s comment on the selection-homogeneity invariant). */
-function alignSel(mode){
-  const objs = selectedObjs(); if(objs.length < 2) return flash('select at least 2 objects');
+/* Align measures every selected object against one reference rectangle, and
+   which rectangle that is, is the user's choice (alignRef):
+
+     SELECTION  the selection's own bounding box. Purely relative, so it
+                needs no entered-group guard — whatever frame the selection's
+                ids live in, they all share it (see selectedObjs()'s comment
+                on the selection-homogeneity invariant). Meaningless on a
+                single object, which is already its own bounding box.
+     ARTBOARD   the document rectangle. Absolute, so — like centre()/snapSel()
+                below — it can't run on a child of an entered group, whose
+                x/y live in that group's local frame, not the document's.
+                Works on any number of objects, one included.
+
+   The artboard rect is the full page, margins excluded: margin guides where
+   you put things, it doesn't redefine the edges. */
+function alignSel(mode, ref = alignRefFor()){
+  const objs = selectedObjs();
+  if(!objs.length) return flash('select something first');
+  if(ref === 'selection' && objs.length < 2) return flash('select at least 2 objects to align to each other');
+  if(ref === 'artboard' && (entered !== null || selInGroup()))
+    return flash("can't align to the artboard — that's inside a group");
   commit();
   const boxes = objs.map(o => ({ o, b: localBox(o) }));
-  const x0 = Math.min(...boxes.map(({b}) => b.x)), x1 = Math.max(...boxes.map(({b}) => b.x+b.w));
-  const y0 = Math.min(...boxes.map(({b}) => b.y)), y1 = Math.max(...boxes.map(({b}) => b.y+b.h));
+  const f = ref === 'artboard' ? { x:0, y:0, w:doc.w, h:doc.h } : bboxOf(objs);
+  const x0 = f.x, x1 = f.x + f.w, y0 = f.y, y1 = f.y + f.h;
   boxes.forEach(({o,b}) => {
     if(mode === 'left')         setPos(o, o.x + (x0 - b.x), o.y);
     else if(mode === 'right')   setPos(o, o.x + (x1 - (b.x+b.w)), o.y);
@@ -2473,17 +2792,12 @@ function distributeSel(axis){
   }
   touch();
 }
-/* these four position/align a single object against the *document's*
-   edges/grid/guides — meaningless for a child of an entered group, whose
-   x/y live in the group's own local frame, not the document's */
-function centre(axis){
-  const o = cur(); if(!o) return; if(entered !== null) return flash("can't align — you're inside a group");
-  commit();
-  const b = localBox(o);                             /* text box left edge == o.x */
-  if(axis === 'x') setPos(o, o.x + ((doc.w - b.w)/2 - b.x), o.y);
-  else             setPos(o, o.x, o.y + ((doc.h - b.h)/2 - b.y));
-  touch();
-}
+/* centring is just the artboard reference on the centre axis — one formula,
+   and it picked up multi-selection support for free on the way */
+const centre = axis => alignSel(axis === 'x' ? 'centerX' : 'centerY', 'artboard');
+/* these three position a single object against the *document's* edges/grid/
+   guides — meaningless for a child of an entered group, whose x/y live in
+   the group's own local frame, not the document's */
 function guidesFromSel(){
   const o = cur(); if(!o) return flash('select something first');
   if(entered !== null) return flash("can't add guides — you're inside a group");
@@ -2725,7 +3039,7 @@ function newDoc(){
   handle = null; sel = []; entered = null; undoS = []; redoS = []; dirty = false;
   resetView();
   touch();
-  clearTimeout(versionTimer);   /* a blank artboard isn't worth a version once the debounce settles */
+  clearTimeout(versionTimer); versionTimer = null;   /* a blank artboard isn't worth a version, nor a flush on the way out */
   flash('new plakt');
 }
 
@@ -2745,14 +3059,34 @@ function listVersions(){
     return Array.isArray(list) ? list : [];
   }catch(e){ return []; }
 }
+/* Every snapshot carries a whole copy of the document, images and all, and
+   an embedded photo is measured in hundreds of KB against a storage quota
+   of a few MB. VERSION_CAP alone can't bound that — 50 snapshots of an
+   illustrated document overflow long before the cap is reached, and once
+   the quota is hit *nothing* saves again: every later edit is lost on the
+   next reload, however long you wait.
+
+   So the cap is a ceiling, not a promise. When the write won't fit, drop
+   the oldest snapshots and retry until it does. History is the thing that
+   can be spared here; the newest state is not. */
 function saveVersionsList(list){
-  try{
-    localStorage.setItem(versionsKey(), JSON.stringify(list));
-    return true;
-  }catch(e){
-    flash('could not save version — local storage is full');
-    return false;
+  const l = [...list];               /* newest first, so pop() sheds the oldest */
+  for(;;){
+    try{
+      localStorage.setItem(versionsKey(), JSON.stringify(l));
+      if(l.length < list.length)
+        flash(`local storage full — keeping the newest ${l.length} version${l.length === 1 ? '' : 's'}`);
+      return true;
+    }catch(e){
+      if(!l.length) break;           /* an empty list is the last thing to try —
+                                        deleting every version must still write */
+      l.pop();
+    }
   }
+  /* not even one snapshot fits, so this document can't be auto-restored at
+     all. Say so plainly: the file itself is the only place it's safe. */
+  flash('document too large for local versions — save it to a file (⌘S)');
+  return false;
 }
 /* called automatically — via touch()'s debounce on every edit, and
    immediately from save()/saveAsCopy() — no manual "save version" button
@@ -2763,7 +3097,11 @@ function saveVersionsList(list){
    the user is mid-edit in. Whichever path runs, it happens before any
    caller's own flash() (see save()), so nothing here can stomp it. */
 function captureVersion(){
-  clearTimeout(versionTimer);   /* an explicit capture (save) preempts a pending debounced one, so they can't fire back-to-back on the same change */
+  /* an explicit capture (save) preempts a pending debounced one, so they
+     can't fire back-to-back on the same change. Nulling it — not just
+     clearing — is what lets flushVersion() tell "a capture is pending"
+     from "the last one already ran". */
+  clearTimeout(versionTimer); versionTimer = null;
   const list = listVersions();
   list.unshift({ id: Date.now(), ts: Date.now(), objects: doc.objects.length, doc: JSON.parse(JSON.stringify(doc)) });
   if(list.length > VERSION_CAP) list.length = VERSION_CAP;
@@ -2920,6 +3258,8 @@ const CMDS = [
   {n:'Duplicate',        k:'⌘D', f:dup},
   {n:'Group',            k:'⌘G', f:groupSel},
   {n:'Ungroup',          k:'⇧⌘G',f:ungroupSel},
+  {n:'Add selection to group', k:'', f:addToGroupCmd},
+  {n:'Move out of group',      k:'', f:removeFromGroupCmd},
   {n:'Copy',             k:'⌘C', f:copyCmd},
   {n:'Paste',            k:'⌘V', f:pasteCmd},
   {n:'Cut',              k:'⌘X', f:()=>{ const objs=selectedObjs(); if(!objs.length) return flash('nothing selected'); clip=clipData(objs); if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(JSON.stringify(clip)).catch(()=>{}); del(); flash('cut '+objs.length+(objs.length===1?' '+objs[0].type:' objects')); }},
