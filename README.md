@@ -30,27 +30,32 @@ Press `Cmd K` (or `Ctrl K`) at any time to open the command palette. It lists ev
 
 **Drawing**
 
-`R` rectangle, `C` circle, `H` half circle, `P` triangle, `L` line, `T` text, `I` image
+ - `R` rectangle
+ - `C` circle
+ - `H` half circle
+ - `P` triangle
+ - `L` line
+ - `T` text
+ - `I` image
 
 **Selection and editing**
 
-`Cmd D` duplicate
-`Cmd G` group, `Cmd Shift G` ungroup
-`Cmd G` with a group in the selection adds the rest of the selection to that group. To take something back out, use MOVE OUT in the selection panel, or drag its row in the Layers tab. Dropping a row onto one of a group's children moves it into that group. On a group's own row the drop line tells you which way it will go: drop under the group's name to land inside it, or out in the left gutter to stay at the top level, below the whole group.
-`Cmd C` copy, `Cmd X` cut, `Cmd V` paste
-`Backspace` delete
-`Shift R` rotate 90°
-`[` send backward, `]` bring forward
-`Shift` click to multi select, or drag a marquee to select several shapes at once
-`Option` or `Ctrl` while dragging to bypass snapping
+ - `Cmd D` duplicate
+ - `Cmd G` group, `Cmd Shift G` ungroup
+ - `Cmd C` copy, `Cmd X` cut, `Cmd V` paste
+ - `Backspace` delete
+ - `Shift R` rotate 90°
+ - `[` send backward, `]` bring forward
+ - `Shift` click to multi select, or drag a marquee to select several shapes at once
+ - `Option` or `Ctrl` while dragging to bypass snapping
 
 **Document**
 
-`Cmd Z` undo, `Cmd Shift Z` redo
-`Cmd S` save, `Cmd O` open
-`Cmd 0` reset zoom and pan
-`G` toggle the grid
-`E` enter edit mode, `Esc` leave it
+ - `Cmd Z` undo, `Cmd Shift Z` redo
+ - `Cmd S` save, `Cmd O` open
+ - `Cmd 0` reset zoom and pan
+ - `G` toggle the grid
+ - `E` enter edit mode, `Esc` leave it
 
 ## Testing
 
